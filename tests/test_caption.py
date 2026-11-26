@@ -26,16 +26,17 @@ signature: 4
 #: A stand-in for ace-caption: reads --src-list and writes a prose file per song.
 FAKE = """\
 #!{python}
-import sys
-args = sys.argv[1:]
-src_list = args[args.index("--src-list") + 1]
-for line in open(src_list, encoding="utf-8"):
+import os, sys
+a = sys.argv[1:]
+if os.environ.get("FAKE_ARGV"):
+    open(os.environ["FAKE_ARGV"], "w", encoding="utf-8").write("\\n".join(a))
+src = a[a.index("--src-list") + 1]
+for line in open(src, encoding="utf-8"):
     line = line.rstrip("\\n")
     if not line:
         continue
     _, out = line.split("\\t")
-    with open(out, "w", encoding="utf-8") as handle:
-        handle.write({prose!r})
+    open(out, "w", encoding="utf-8").write({prose!r})
 """
 
 
@@ -99,6 +100,20 @@ class CaptionRunTests(unittest.TestCase):
         styles = caption.styles_for([a], self.binary, self.moss)
         self.assertIn("song.wav", styles)
         self.assertTrue(styles["song.wav"].startswith("mandopop, acoustic ballad."))
+
+    def test_describe_loads_the_q8_0_model(self):
+        a = self.root / "song.wav"
+        a.write_bytes(b"RIFF")
+        argv_file = self.root / "argv.txt"
+        os.environ["FAKE_ARGV"] = str(argv_file)
+        try:
+            caption.describe([a], self.binary, self.moss)
+        finally:
+            del os.environ["FAKE_ARGV"]
+        argv = argv_file.read_text(encoding="utf-8").splitlines()
+        self.assertEqual(argv[argv.index("--lm") + 1], str(self.moss / "moss-lm-q8_0.gguf"))
+        self.assertNotIn("--max-tokens", argv)
+        self.assertNotIn("--encoder-window", argv)
 
 
 if __name__ == "__main__":
