@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.venv/
+venv/
+
+# run artifacts
+models/
+runs/
+trainer/
+dataset/audio/*.wav
+!dataset/audio/*.txt

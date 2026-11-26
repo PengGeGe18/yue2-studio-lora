@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "yue2-lora"
+version = "0.1.0"
+description = "Command-line YuE2 LoRA trainer extracted from YuE2-Studio (no UI, config driven, one-command training)"
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "MIT" }
+authors = [{ name = "yue2-lora contributors" }]
+keywords = ["yue2", "lora", "lokr", "music", "training", "cli"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+    "Topic :: Multimedia :: Sound/Audio",
+]
+dependencies = []
+
+[project.scripts]
+yue2-lora = "yue2_lora.cli:main"
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+
+[tool.setuptools]
+packages = ["yue2_lora"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

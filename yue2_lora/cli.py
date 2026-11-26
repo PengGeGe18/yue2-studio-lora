@@ -1,0 +1,573 @@
+"""Command-line entry point."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+import time
+from dataclasses import asdict
+from pathlib import Path
+from typing import Dict, List, Optional
+
+from . import __version__, trainer as trainer_mod
+from .assets import COMPANION, TOKENIZER, TRAINING_FILES, all_models
+from .checkpoints import checkpoints as list_checkpoints
+from .checkpoints import next_output_dir, resume_point
+from .config import Config, ConfigError, load
+from .dataset import (
+    DatasetError,
+    dataset_summary,
+    inspect_songs,
+    prepare_dataset,
+    require_prepared,
+)
+from .download import DownloadError, ensure_asset
+from .recipe import Recipe
+from .runner import print_stages, run_stage, run_stages
+from .stages import TrainingInputs, continuation_stage, training_stages
+from .util import ensure_dir, eprint, find_on_path, human_bytes, platform_key
+
+CONFIG_TEMPLATE = """\
+# yue2-lora configuration. Paths are relative to this file.
+# One command trains:  yue2-lora train -c config.toml
+
+[workspace]
+dir = "."                 # models, runs and the trainer live under this folder
+models = "models"
+runs = "runs"
+trainer = "trainer"
+
+[dataset]
+audio = "dataset/audio"   # 48 kHz WAV files, each with a <stem>.lrc lyrics file
+style = ""                # fallback one-line style when <stem>.yue2.txt is missing
+trigger = "sks"           # rare word the adapter learns to answer to
+# vocals = "dataset/vocals"       # <song>/vocals.wav, only for lyric timing
+normalize = false         # true: convert to 48 kHz with ffmpeg
+# prepared = "dataset/prepared-audio"   # 48 kHz output, used when normalize = true
+
+[model]
+# Empty means: download the pinned file into workspace/models.
+# base = ""
+# companion = ""
+# tokenizer = ""
+
+[train]
+device = "CUDA0"          # CUDA0, Vulkan0, MTL0 or CPU
+ffmpeg = "ffmpeg"
+# trainer = "/path/to/ace-train"   # use an existing build
+
+[recipe]
+preset = "balanced"       # fast | balanced | thorough | tuned
+seed = 42
+# The fields below apply to preset = "tuned" only; a base-matched preset
+# (fast/balanced/thorough) fixes them itself.
+# stop = "kl"             # kl | epochs
+# epochs = 20
+# steps = 750
+# save_every = 50
+# target_kl = 1.4
+# adapter = "lokr"        # lokr | lora
+# rank = 64
+# alpha = 256
+# lokr_dim = 64
+# lokr_factor = 4
+# optimizer = "prodigy"   # prodigy | adamw
+# learning_rate = 0.0002
+# planner_lr_scale = 0.3
+# lyric_timing = true
+# cursor_weight = 0.08
+"""
+
+_SAMPLE_SIDECAR = """\
+caption: indie pop, warm female vocal
+is_instrumental: false
+lyrics:
+[Verse]
+hold the light a little longer
+"""
+
+
+def _config(args: argparse.Namespace) -> Config:
+    return load(Path(args.config))
+
+
+# -- init ------------------------------------------------------------------
+
+
+def cmd_init(args: argparse.Namespace) -> int:
+    config_path = Path(args.config)
+    if config_path.exists() and not args.force:
+        eprint(f"{config_path} already exists; pass --force to overwrite")
+        return 1
+    config_path.write_text(CONFIG_TEMPLATE, encoding="utf-8")
+    root = config_path.parent
+    for folder in ("dataset/audio", "dataset/vocals", "models", "runs", "trainer"):
+        ensure_dir(root / folder)
+    sample = root / "dataset" / "audio" / "example.txt"
+    if not sample.exists():
+        sample.write_text(_SAMPLE_SIDECAR, encoding="utf-8")
+    eprint(f"wrote {config_path}")
+    eprint("next: put 48 kHz WAV files in dataset/audio, then run")
+    eprint(f"  yue2-lora train -c {config_path}")
+    return 0
+
+
+# -- download --------------------------------------------------------------
+
+
+def _ensure_models(config: Config, need_align: bool, download_missing: bool = True) -> Dict[str, Path]:
+    """Verify or download every model, returning the paths the stages use."""
+    ensure_dir(config.models_dir)
+    resolved: Dict[str, Path] = {}
+
+    def stock_or_download(asset, path: Path) -> Path:
+        stock = (config.models_dir / asset.filename).resolve()
+        if path.resolve() == stock:
+            if not path.is_file():
+                if not download_missing:
+                    raise DownloadError(f"missing {path}; run `yue2-lora download`")
+                ensure_asset(asset, config.models_dir)
+            return path
+        if not path.is_file():
+            raise DownloadError(f"model not found: {path}")
+        return path
+
+    resolved["base"] = stock_or_download(TRAINING_FILES[0], config.base)
+    resolved["companion"] = stock_or_download(COMPANION, config.companion)
+    resolved["tokenizer"] = stock_or_download(TOKENIZER, config.tokenizer)
+    resolved["vae"] = stock_or_download(TRAINING_FILES[1], config.models_dir / TRAINING_FILES[1].filename)
+    resolved["semantic"] = stock_or_download(TRAINING_FILES[2], config.models_dir / TRAINING_FILES[2].filename)
+    resolved["sheetsage"] = stock_or_download(TRAINING_FILES[3], config.models_dir / TRAINING_FILES[3].filename)
+    if need_align:
+        resolved["aligner"] = stock_or_download(
+            TRAINING_FILES[4], config.models_dir / TRAINING_FILES[4].filename
+        )
+    return resolved
+
+
+def cmd_download(args: argparse.Namespace) -> int:
+    config = _config(args)
+    ensure_dir(config.models_dir)
+    assets = all_models(include_tokenizer=not args.no_tokenizer)
+    total = sum(asset.bytes for asset in assets)
+    eprint(f"downloading {len(assets)} files ({human_bytes(total)}) into {config.models_dir}")
+    for asset in assets:
+        ensure_asset(asset, config.models_dir)
+    if platform_key() == "windows" and not args.no_trainer:
+        _ensure_trainer(config, build=False)
+    eprint("all files verified")
+    return 0
+
+
+# -- doctor ----------------------------------------------------------------
+
+
+def cmd_doctor(args: argparse.Namespace) -> int:
+    config = _config(args)
+    ok = True
+    print(f"yue2-lora {__version__} on {platform_key()}")
+    print(f"workspace: {config.workspace}")
+    ffmpeg = find_on_path(config.ffmpeg) if config.ffmpeg else None
+    print(f"ffmpeg:    {ffmpeg or 'not found (needed for non-WAV input and normalization)'}")
+    print(f"device:    {config.device}")
+
+    print(f"dataset:   {config.audio}")
+    if config.normalize:
+        print(f"prepared:  {config.training_audio}")
+    inspection = inspect_songs(config.training_audio)
+    if inspection.songs:
+        print(f"           {dataset_summary(inspection.songs)}")
+    if inspection.problems:
+        for problem in inspection.problems:
+            print(f"  {problem}")
+        print("  run: yue2-lora dataset -c <config>")
+        ok = False
+
+    print("models:")
+    for asset in all_models():
+        path = config.models_dir / asset.filename
+        if path.is_file():
+            size = path.stat().st_size
+            state = "ok" if size == asset.bytes else f"size {size}, expected {asset.bytes}"
+        else:
+            state = "missing"
+            ok = False
+        print(f"  {asset.filename:42} {state}")
+
+    trainer = trainer_mod.locate(config.workspace, config.trainer)
+    if trainer:
+        print(f"trainer:   {trainer}")
+        try:
+            trainer_mod.probe(trainer)
+            print("           responds to --help")
+        except (trainer_mod.TrainerError, OSError) as error:
+            print(f"  error: {error}")
+            ok = False
+    else:
+        print("trainer:   not installed (yue2-lora train installs or builds it)")
+
+    nvidia = find_on_path("nvidia-smi")
+    print(f"nvidia-smi: {nvidia or 'not found'}")
+    return 0 if ok else 1
+
+
+# -- dataset ---------------------------------------------------------------
+
+
+def cmd_dataset(args: argparse.Namespace) -> int:
+    config = _config(args)
+    try:
+        songs, output = prepare_dataset(
+            config.audio,
+            config.default_style,
+            config.normalize,
+            config.prepared_dir,
+            config.ffmpeg,
+        )
+    except DatasetError as error:
+        eprint(f"error: {error}")
+        return 1
+    if args.json:
+        print(json.dumps([asdict(song) for song in songs], indent=2, ensure_ascii=False))
+        return 0
+    print(dataset_summary(songs))
+    print(f"audio: {output}")
+    if config.normalize:
+        eprint(f"[dataset] wrote the 48 kHz audio to {output}")
+    return 0
+
+
+# -- stages ----------------------------------------------------------------
+
+
+def _inputs(config: Config, recipe: Recipe, run_dir: Path, models: Dict[str, Path]) -> TrainingInputs:
+    return TrainingInputs(
+        audio=config.training_audio,
+        models=config.models_dir,
+        checkpoint=models["base"],
+        tokenizer=models["tokenizer"],
+        companion=models["companion"],
+        run=run_dir,
+        vocals=config.vocals,
+        trigger=config.trigger,
+        recipe=recipe,
+        device=config.device,
+    )
+
+
+def cmd_stages(args: argparse.Namespace) -> int:
+    config = _config(args)
+    try:
+        songs = _songs(config)
+    except DatasetError as error:
+        eprint(f"error: {error}")
+        return 1
+    recipe = _recipe_for(config, len(songs))
+    models = _model_paths_without_download(config, recipe)
+    run_dir = config.runs_dir / "dry-run"
+    inputs = _inputs(config, recipe, run_dir, models)
+    stages = training_stages(inputs)
+    trainer = trainer_mod.locate(config.workspace, config.trainer)
+    print(f"# {len(songs)} songs, preset {recipe.preset}, {recipe.steps} steps")
+    print_stages(trainer, stages)
+    return 0
+
+
+def _model_paths_without_download(config: Config, recipe: Recipe) -> Dict[str, Path]:
+    paths = {
+        "base": config.base,
+        "companion": config.companion,
+        "tokenizer": config.tokenizer,
+        "vae": config.models_dir / TRAINING_FILES[1].filename,
+        "semantic": config.models_dir / TRAINING_FILES[2].filename,
+        "sheetsage": config.models_dir / TRAINING_FILES[3].filename,
+    }
+    if recipe.lyric_timing:
+        paths["aligner"] = config.models_dir / TRAINING_FILES[4].filename
+    return paths
+
+
+# -- checkpoints -----------------------------------------------------------
+
+
+def cmd_checkpoints(args: argparse.Namespace) -> int:
+    config = _config(args)
+    run_dir = Path(args.run) if args.run else _latest_run(config.runs_dir)
+    if run_dir is None:
+        eprint("no training run found")
+        return 1
+    print(f"run: {run_dir}")
+    found = list_checkpoints(run_dir)
+    if not found:
+        print("no complete checkpoints yet")
+        return 0
+    for checkpoint in found:
+        print(f"step {checkpoint.step}: {', '.join(path.name for path in checkpoint.files)}")
+    point = resume_point(run_dir)
+    if point:
+        print(f"resume from step {point[0]}: {point[1]}")
+    return 0
+
+
+def _latest_run(runs_dir: Path) -> Optional[Path]:
+    if not runs_dir.is_dir():
+        return None
+    runs = [path for path in runs_dir.iterdir() if path.is_dir() and (path / "run.json").is_file()]
+    if not runs:
+        return None
+    return max(runs, key=lambda path: path.stat().st_mtime)
+
+
+# -- train -----------------------------------------------------------------
+
+
+def _songs(config: Config) -> list:
+    return require_prepared(config.training_audio)
+
+
+def _recipe_for(config: Config, songs: int) -> Recipe:
+    recipe = config.recipe.for_songs(songs)
+    recipe.check()
+    return recipe
+
+
+def _ensure_trainer(config: Config, build: bool) -> Path:
+    return trainer_mod.ensure(config.workspace, config.trainer, build=build)
+
+
+def _run_name(config: Config) -> str:
+    stem = config.path.stem.replace(" ", "-")
+    return f"{time.strftime('%Y%m%d-%H%M%S')}-{stem}"
+
+
+def cmd_train(args: argparse.Namespace) -> int:
+    config = _config(args)
+    try:
+        if args.resume:
+            return _resume(config, args)
+        songs = _songs(config)
+        recipe = _recipe_for(config, len(songs))
+        eprint(f"[dataset] {dataset_summary(songs)}")
+
+        models = _model_paths_without_download(config, recipe)
+        trainer = trainer_mod.locate(config.workspace, config.trainer)
+        if args.dry_run:
+            run_dir = config.runs_dir / "dry-run"
+            inputs = _inputs(config, recipe, run_dir, models)
+            print(f"# {dataset_summary(songs)}, preset {recipe.preset}, {recipe.steps} steps")
+            print_stages(trainer, training_stages(inputs))
+            return 0
+
+        # Resolve the trainer first so an unsupported machine fails before a
+        # multi-gigabyte download starts.
+        trainer = _ensure_trainer(config, build=args.build_trainer)
+        models = _ensure_models(config, recipe.lyric_timing)
+        run_dir = Path(args.run) if args.run else config.runs_dir / _run_name(config)
+        ensure_dir(run_dir)
+        ensure_dir(config.runs_dir)
+        _save_run(config, recipe, songs, run_dir, trainer)
+
+        inputs = _inputs(config, recipe, run_dir, models)
+        if recipe.lyric_timing:
+            _require_vocals(config, songs)
+
+        stages = training_stages(inputs)
+        _print_plan(recipe, run_dir)
+        run_stages(trainer, stages, total_steps=recipe.steps)
+
+        _finish(run_dir, recipe)
+        return 0
+    except (DatasetError, DownloadError, trainer_mod.TrainerError, ValueError) as error:
+        eprint(f"error: {error}")
+        return 1
+
+
+def _resume(config: Config, args: argparse.Namespace) -> int:
+    run_dir = Path(args.run) if args.run else _latest_run(config.runs_dir)
+    if run_dir is None:
+        eprint("no run to resume")
+        return 1
+    state = _load_run(run_dir)
+    point = resume_point(run_dir)
+    if point is None:
+        eprint(f"{run_dir} has no complete optimizer state to resume from")
+        return 1
+    recipe = Recipe.from_dict(state.get("recipe", {}))
+    recipe.check()
+    trainer = _ensure_trainer(config, build=args.build_trainer)
+    models = _ensure_models(config, recipe.lyric_timing)
+    inputs = _inputs(config, recipe, run_dir, models)
+    output = next_output_dir(run_dir)
+    stage = continuation_stage(inputs, output, point[1])
+    if args.dry_run:
+        print_stages(trainer, [stage])
+        return 0
+    eprint(f"[resume] step {point[0]} from {point[1]}")
+    eprint(f"[resume] output {output}, target {recipe.steps} steps")
+    run_stage(trainer, stage, total_steps=recipe.steps)
+    _finish(run_dir, recipe)
+    return 0
+
+
+def _require_vocals(config: Config, songs: list) -> None:
+    missing = [
+        song.stem for song in songs
+        if not song.instrumental and song.lyrics.strip()
+        and not (config.vocals / song.stem / "vocals.wav").is_file()
+    ]
+    if missing:
+        raise DatasetError(
+            "lyric timing needs <song>/vocals.wav for every song with lyrics; missing: "
+            + ", ".join(missing)
+        )
+
+
+def _print_plan(recipe: Recipe, run_dir: Path) -> None:
+    eprint(f"[run] {run_dir}")
+    eprint(
+        f"[run] preset {recipe.preset}, {recipe.steps} steps, {recipe.grad_accum} songs/update, "
+        f"save every {recipe.save_every}, adapter {recipe.adapter} "
+        f"dim {recipe.lokr_dim} factor {recipe.lokr_factor}"
+    )
+
+
+def _save_run(config: Config, recipe: Recipe, songs: list, run_dir: Path, trainer: Path) -> None:
+    state = {
+        "name": run_dir.name,
+        "created_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "dataset": {
+            "audio": str(config.audio),
+            "style": config.default_style,
+            "trigger": config.trigger,
+            "songs": len(songs),
+        },
+        "recipe": recipe.to_dict(),
+        "train": {"device": config.device},
+        "trainer": str(trainer),
+    }
+    (run_dir / "run.json").write_text(json.dumps(state, indent=2), encoding="utf-8")
+
+
+def _load_run(run_dir: Path) -> dict:
+    path = run_dir / "run.json"
+    if not path.is_file():
+        raise DatasetError(f"{run_dir} has no run.json")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _finish(run_dir: Path, recipe: Recipe) -> None:
+    found = list_checkpoints(run_dir)
+    if found:
+        eprint(f"[done] {len(found)} checkpoint(s); latest step {found[0].step}")
+        eprint(f"[done] adapters: {', '.join(path.name for path in found[0].files)}")
+    else:
+        eprint(f"[done] finished {recipe.steps} steps; checkpoints are under {run_dir}")
+
+
+# -- trainer ---------------------------------------------------------------
+
+
+def cmd_trainer(args: argparse.Namespace) -> int:
+    config = _config(args)
+    try:
+        if args.build:
+            path = trainer_mod.build_from_source(config.workspace)
+        elif args.install:
+            path = trainer_mod.install_prebuilt(config.workspace)
+        else:
+            path = trainer_mod.locate(config.workspace, config.trainer)
+            if path is None:
+                eprint("no trainer found; pass --install (Windows) or --build, or set train.trainer")
+                return 1
+        print(path)
+        if args.probe:
+            output = trainer_mod.probe(path)
+            print(output)
+        return 0
+    except (trainer_mod.TrainerError, OSError, ValueError) as error:
+        eprint(f"error: {error}")
+        return 1
+
+
+# -- info ------------------------------------------------------------------
+
+
+def cmd_info(args: argparse.Namespace) -> int:
+    config = _config(args)
+    print(json.dumps(config.describe(), indent=2, ensure_ascii=False))
+    return 0
+
+
+# -- parser ----------------------------------------------------------------
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="yue2-lora",
+        description="Train YuE2 LoRA/LoKr adapters from a config file (no UI).",
+    )
+    parser.add_argument("--version", action="version", version=f"yue2-lora {__version__}")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    def with_config(name: str, help_text: str) -> argparse.ArgumentParser:
+        command = sub.add_parser(name, help=help_text)
+        command.add_argument("-c", "--config", default="config.toml", help="config file (TOML or JSON)")
+        return command
+
+    init = with_config("init", "write a config and the folder skeleton")
+    init.add_argument("--force", action="store_true", help="overwrite an existing config")
+    init.set_defaults(func=cmd_init)
+
+    download = with_config("download", "download and verify the pinned models")
+    download.add_argument("--no-tokenizer", action="store_true", help="skip the YuE2 tokenizer GGUF")
+    download.add_argument("--no-trainer", action="store_true", help="skip the prebuilt trainer")
+    download.set_defaults(func=cmd_download)
+
+    doctor = with_config("doctor", "check the dataset, models and trainer")
+    doctor.set_defaults(func=cmd_doctor)
+
+    dataset = with_config("dataset", "check the dataset and print its songs")
+    dataset.add_argument("--json", action="store_true", help="print the songs as JSON")
+    dataset.set_defaults(func=cmd_dataset)
+
+    stages = with_config("stages", "print the trainer commands without running them")
+    stages.set_defaults(func=cmd_stages)
+
+    checkpoints = with_config("checkpoints", "list a run's checkpoints and resume point")
+    checkpoints.add_argument("--run", help="run folder (default: the latest)")
+    checkpoints.set_defaults(func=cmd_checkpoints)
+
+    train = with_config("train", "one-command training (download, prepare, train)")
+    train.add_argument("--run", help="run folder (a new one by default)")
+    train.add_argument("--resume", action="store_true", help="continue the latest run")
+    train.add_argument("--dry-run", action="store_true", help="print the commands only")
+    train.add_argument("--build-trainer", action="store_true", help="build ace-train if missing")
+    train.set_defaults(func=cmd_train)
+
+    trainer = with_config("trainer", "locate, install or build the ace-train helper")
+    trainer.add_argument("--install", action="store_true", help="download the prebuilt Windows trainer")
+    trainer.add_argument("--build", action="store_true", help="build ace-train from the pinned source")
+    trainer.add_argument("--probe", action="store_true", help="run --help to check the binary")
+    trainer.set_defaults(func=cmd_trainer)
+
+    info = with_config("info", "print the merged configuration")
+    info.set_defaults(func=cmd_info)
+    return parser
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    try:
+        return args.func(args)
+    except ConfigError as error:
+        eprint(f"config error: {error}")
+        return 2
+    except KeyboardInterrupt:
+        eprint("interrupted")
+        return 130
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,48 @@
+# yue2-lora configuration. Paths are relative to this file.
+# One command trains:  yue2-lora train -c config.toml
+
+[workspace]
+dir = "."                 # models, runs and the trainer live under this folder
+models = "models"
+runs = "runs"
+trainer = "trainer"
+
+[dataset]
+audio = "dataset/audio"   # 48 kHz WAV files, each with a <stem>.lrc lyrics file
+style = ""                # fallback one-line style when <stem>.yue2.txt is missing
+trigger = "sks"           # rare word the adapter learns to answer to
+# vocals = "dataset/vocals"       # <song>/vocals.wav, only for lyric timing
+normalize = false         # true: convert to 48 kHz with ffmpeg
+# prepared = "dataset/prepared-audio"   # 48 kHz output, used when normalize = true
+
+[model]
+# Empty means: download the pinned file into workspace/models.
+# base = ""
+# companion = ""
+# tokenizer = ""
+
+[train]
+device = "CUDA0"          # CUDA0, Vulkan0, MTL0 or CPU
+ffmpeg = "ffmpeg"
+# trainer = "/path/to/ace-train"   # use an existing build
+
+[recipe]
+preset = "balanced"       # fast | balanced | thorough | tuned
+seed = 42
+# The fields below apply to preset = "tuned" only; a base-matched preset
+# (fast/balanced/thorough) fixes them itself.
+# stop = "kl"             # kl | epochs
+# epochs = 20
+# steps = 750
+# save_every = 50
+# target_kl = 1.4
+# adapter = "lokr"        # lokr | lora
+# rank = 64
+# alpha = 256
+# lokr_dim = 64
+# lokr_factor = 4
+# optimizer = "prodigy"   # prodigy | adamw
+# learning_rate = 0.0002
+# planner_lr_scale = 0.3
+# lyric_timing = true
+# cursor_weight = 0.08
