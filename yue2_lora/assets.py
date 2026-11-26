@@ -25,6 +25,11 @@ COMPANION_REVISION = "e2e63d859f3af879baf1b4d4e9f22d1eeda6fde5"
 TOKENIZER_REPOSITORY = "Serveurperso/YuE2-GGUF"
 TOKENIZER_REVISION = "e630f2b8f6aedf8254c3186438633c1b5eeaf80a"
 
+#: MOSS-Music-8B, the local captioner behind YuE2-Studio's "按声音描述".
+#: HOT-Step's native GGML port; the studio pins this exact revision.
+MOSS_REPOSITORY = "scragnog/MOSS-Music-8B-Instruct-GGUF"
+MOSS_REVISION = "9fe86435bd542bf29cbf4984e9e0ab0ea8ca7e00"
+
 #: Prebuilt trainer release from YuE2-Studio (Windows x64 + CUDA).
 TRAINER_RELEASE_TAG = "hotstep-tools-479cbeb8-xcr0"
 TRAINER_ASSET = "hotstep-tools-479cbeb8-xcr0-cuda-windows-x64.zip"
@@ -128,7 +133,8 @@ TOKENIZER = Asset(
     sha256="cd3efd250b734a229172800f08f33a893ad1f66b521666e176cdae4a0729b281",
 )
 
-#: The prebuilt trainer archive (Windows only).
+#: The prebuilt trainer archive (Windows only). The same archive also ships
+#: ``ace-caption.exe``, the MOSS captioner that describes a song by ear.
 TRAINER = Asset(
     id="music-train",
     label=f"Trainer (HOT-Step {TRAINER_COMMIT[:8]})",
@@ -136,6 +142,31 @@ TRAINER = Asset(
     url=f"https://github.com/timoncool/YuE2-Studio/releases/download/{TRAINER_RELEASE_TAG}/{TRAINER_ASSET}",
     bytes=TRAINER_ASSET_BYTES,
 )
+
+#: MOSS-Music-8B weights the captioner reads, stored flat in ``models/moss``.
+MOSS_AUDIO = Asset(
+    id="moss-audio",
+    label="MOSS-Music audio tower (F16)",
+    filename="moss-aud-f16.gguf",
+    url=_huggingface(MOSS_REPOSITORY, MOSS_REVISION, "moss-aud-f16.gguf"),
+    bytes=1_724_480_640,
+)
+
+MOSS_LM = Asset(
+    id="moss-lm",
+    label="MOSS-Music-8B language model (Q8_0)",
+    filename="moss-lm-q8_0.gguf",
+    url=_huggingface(MOSS_REPOSITORY, MOSS_REVISION, "moss-lm-q8_0.gguf"),
+    bytes=8_709_513_792,
+)
+
+#: What the captioner needs to listen to a song.
+LISTEN_FILES = [MOSS_LM, MOSS_AUDIO]
+
+
+def listen_assets() -> list[Asset]:
+    return list(LISTEN_FILES)
+
 
 
 def all_models(include_tokenizer: bool = True) -> list[Asset]:

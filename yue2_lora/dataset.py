@@ -3,8 +3,9 @@
 A dataset is a folder of audio files plus, for every song:
 
 * ``<stem>.yue2.txt`` - the one-line style the planner is prompted with. When
-  it is missing it is generated first, from an existing ``<stem>.txt`` caption
-  or from ``[dataset] style``;
+  it is missing or empty it is filled by the captioner (MOSS-Music, see
+  :mod:`yue2_lora.caption`) - a description of the song heard by ear, exactly
+  as YuE2-Studio's "按声音描述" - or from an existing ``<stem>.txt`` caption;
 * ``<stem>.lrc`` - the lyrics as an LRC file; timestamps are stripped;
 * ``<stem>.txt`` - generated/merged from the two above: ``caption:`` is the
   ``.yue2.txt`` line, ``is_instrumental:`` defaults to false, ``lyrics:`` is
@@ -119,18 +120,35 @@ def write_sidecars(folder: Path, songs: List[Song]) -> None:
             Path(folder / f"{song.stem}{extension}").write_text(text, encoding="utf-8")
 
 
-def collect_songs(audio: Path, default_style: str = "") -> List[Song]:
-    """Build the sidecars from ``.lrc`` files, generating missing ``.yue2.txt``.
+def songs_needing_style(audio: Path) -> List[Path]:
+    """Audio files without a style: no ``.yue2.txt`` and no ``.txt`` caption."""
+    files = _audio_files(audio)
+    needed: List[Path] = []
+    for path in files:
+        stem = path.with_suffix("")
+        if _read_style(stem):
+            continue
+        existing = _read_sidecar(stem)
+        if existing and existing[0].strip():
+            continue
+        needed.append(path)
+    return needed
 
-    The style comes from ``<stem>.yue2.txt``; when that file is missing it is
-    written first from an existing ``<stem>.txt`` caption, else from
-    ``default_style`` (``[dataset] style``). The lyrics come from
-    ``<stem>.lrc``. ``<stem>.txt`` is then merged from both.
+
+def collect_songs(audio: Path, styles: Optional[Dict[str, str]] = None) -> List[Song]:
+    """Build the sidecars from ``.lrc`` files, filling missing styles.
+
+    The style comes from ``<stem>.yue2.txt`` (or an existing ``<stem>.txt``
+    caption). When both are missing, ``styles`` - the captioner's one-line
+    description keyed by file name - supplies it and it is written to
+    ``<stem>.yue2.txt``. Without an entry the song is reported as a problem
+    telling the caller to run the captioner first.
+    The lyrics come from ``<stem>.lrc``. ``<stem>.txt`` is then merged.
     """
     files = _audio_files(audio)
     if not files:
         raise DatasetError(f"no audio files ({', '.join(AUDIO_EXTENSIONS)}) in {audio}")
-    default_style = default_style.strip()
+    styles = styles or {}
     songs: List[Song] = []
     problems: List[str] = []
     for path in files:
@@ -139,10 +157,11 @@ def collect_songs(audio: Path, default_style: str = "") -> List[Song]:
 
         style = _read_style(stem)
         if not style:
-            source = (existing[0].strip() if existing else "") or default_style
+            source = (existing[0].strip() if existing else "") or styles.get(path.name, "").strip()
             if not source:
                 problems.append(
-                    f"{path.name}: no {path.stem}.yue2.txt and [dataset] style is empty"
+                    f"{path.name}: no style - run `yue2-lora caption -c <config> --install` "
+                    f"or write {path.stem}.yue2.txt"
                 )
                 continue
             Path(f"{stem}.yue2.txt").write_text(f"{source}\n", encoding="utf-8")
@@ -316,18 +335,20 @@ def normalize_audio(audio: Path, songs: List[Song], destination: Path, ffmpeg: O
 
 def prepare_dataset(
     audio: Path,
-    default_style: str = "",
     normalize: bool = False,
     prepared_dir: Optional[Path] = None,
     ffmpeg: Optional[str] = None,
+    styles: Optional[Dict[str, str]] = None,
 ) -> Tuple[List[Song], Path]:
     """Build the sidecars and, when asked, the 48 kHz audio a run trains on.
 
-    Returns the songs and the folder the trainer's ``--audio`` points at: the
-    source folder, or a prepared 48 kHz copy. This is the only dataset step
-    that writes files; ``train`` just checks the result.
+    ``styles`` are the captioner's descriptions (keyed by file name) for songs
+    that have no ``.yue2.txt`` yet. Returns the songs and the folder the
+    trainer's ``--audio`` points at: the source folder, or a prepared 48 kHz
+    copy. This is the only dataset step that writes files; ``train`` just
+    checks the result.
     """
-    songs = collect_songs(audio, default_style)
+    songs = collect_songs(audio, styles)
     if normalize:
         target = prepared_dir or (audio.parent / "prepared-audio")
         return songs, normalize_audio(audio, songs, target, ffmpeg)

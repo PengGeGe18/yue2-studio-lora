@@ -53,11 +53,24 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.vocals, (root / "dataset" / "vocals").resolve())
         self.assertEqual(config.recipe.preset, "thorough")
         self.assertFalse(config.normalize)
-        self.assertEqual(config.default_style, "")
         self.assertEqual(config.prepared_dir, (root / "dataset" / "prepared-audio").resolve())
         self.assertEqual(config.training_audio, config.audio)
+        self.assertEqual(config.caption_seconds, 120)
+        self.assertIsNone(config.captioner)
 
-    def test_the_dataset_style_is_read(self):
+    def test_caption_settings_are_read(self):
+        root = Path(tempfile.mkdtemp(prefix="y2cfg-"))
+        (root / "dataset" / "audio").mkdir(parents=True)
+        (root / "config.toml").write_text(
+            '[dataset]\naudio = "dataset/audio"\ncaption_seconds = 90\ncaptioner = "bin/ace-caption"\n',
+            encoding="utf-8",
+        )
+        config = load(root / "config.toml")
+        self.assertEqual(config.caption_seconds, 90)
+        self.assertEqual(config.captioner, (root / "bin" / "ace-caption").resolve())
+
+    def test_dataset_style_key_is_ignored_without_error(self):
+        """A stale [dataset] style key must not crash load; it is simply ignored."""
         root = Path(tempfile.mkdtemp(prefix="y2cfg-"))
         (root / "dataset" / "audio").mkdir(parents=True)
         (root / "config.toml").write_text(
@@ -65,7 +78,8 @@ class ConfigTests(unittest.TestCase):
             encoding="utf-8",
         )
         config = load(root / "config.toml")
-        self.assertEqual(config.default_style, "indie pop, warm vocal")
+        # The stale key was silently discarded; the captioner fills styles at runtime.
+        self.assertEqual(config.audio, (root / "dataset" / "audio").resolve())
 
     def test_normalize_points_training_at_the_prepared_folder(self):
         root = Path(tempfile.mkdtemp(prefix="y2cfg-"))

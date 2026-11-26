@@ -12,6 +12,7 @@ from yue2_lora.dataset import (
     parse_sidecar,
     prepare_dataset,
     require_prepared,
+    songs_needing_style,
     wav_sample_rate,
     write_sidecars,
 )
@@ -83,25 +84,32 @@ class DatasetTests(unittest.TestCase):
         self.assertIn("hold the light", merged)
         self.assertNotIn("old words", merged)
 
-    def test_yue2_is_generated_from_the_default_style(self):
+    def test_style_from_the_captioner_is_written_then_merged(self):
         make_wav(self.audio / "song.wav")
         (self.audio / "song.lrc").write_text(LRC, encoding="utf-8")
-        songs = collect_songs(self.audio, "indie pop, warm vocal")
-        self.assertEqual(songs[0].style, "indie pop, warm vocal")
+        songs = collect_songs(self.audio, {"song.wav": "indie pop, warm vocal, 96 BPM"})
+        self.assertEqual(len(songs), 1)
+        self.assertEqual(songs[0].style, "indie pop, warm vocal, 96 BPM")
         self.assertEqual(
             (self.audio / "song.yue2.txt").read_text(encoding="utf-8"),
-            "indie pop, warm vocal\n",
+            "indie pop, warm vocal, 96 BPM\n",
         )
         merged = (self.audio / "song.txt").read_text(encoding="utf-8")
-        self.assertIn("caption: indie pop, warm vocal", merged)
-        self.assertIn("intro line", merged)
+        self.assertIn("caption: indie pop, warm vocal, 96 BPM", merged)
+        self.assertIn("hold the light", merged)
 
-    def test_missing_style_is_reported(self):
+    def test_missing_style_points_at_the_captioner(self):
         make_wav(self.audio / "song.wav")
         (self.audio / "song.lrc").write_text(LRC, encoding="utf-8")
         with self.assertRaises(DatasetError) as caught:
             collect_songs(self.audio)
-        self.assertIn("song.yue2.txt", str(caught.exception))
+        self.assertIn("yue2-lora caption", str(caught.exception))
+
+    def test_songs_needing_style_lists_songs_without_a_style(self):
+        make_wav(self.audio / "a.wav")
+        make_wav(self.audio / "b.wav")
+        (self.audio / "a.yue2.txt").write_text("ambient\n", encoding="utf-8")
+        self.assertEqual([path.name for path in songs_needing_style(self.audio)], ["b.wav"])
 
     def test_missing_lrc_is_reported(self):
         make_wav(self.audio / "song.wav")
@@ -145,7 +153,9 @@ class DatasetTests(unittest.TestCase):
     def test_prepare_writes_the_files_train_then_reads(self):
         make_wav(self.audio / "song.wav")
         (self.audio / "song.lrc").write_text(LRC, encoding="utf-8")
-        songs, output = prepare_dataset(self.audio, "ambient")
+        # Pre-create .yue2.txt so we know the expected style.
+        (self.audio / "song.yue2.txt").write_text("ambient\n", encoding="utf-8")
+        songs, output = prepare_dataset(self.audio)
         self.assertEqual(output, self.audio)
         self.assertEqual(songs[0].style, "ambient")
         self.assertTrue((self.audio / "song.yue2.txt").is_file())

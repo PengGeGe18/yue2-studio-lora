@@ -30,11 +30,12 @@ class Config:
     runs_dir: Path
     trainer_dir: Path
     audio: Path
-    default_style: str
     vocals: Path
     trigger: str
     normalize: bool
     prepared_dir: Path
+    captioner: Optional[Path]
+    caption_seconds: int
     base: Path
     companion: Path
     tokenizer: Path
@@ -54,11 +55,12 @@ class Config:
             "workspace": str(self.workspace),
             "dataset": {
                 "audio": str(self.audio),
-                "style": self.default_style,
                 "vocals": str(self.vocals),
                 "trigger": self.trigger,
                 "normalize": self.normalize,
                 "prepared": str(self.prepared_dir),
+                "captioner": str(self.captioner) if self.captioner else None,
+                "caption_seconds": self.caption_seconds,
                 "training_audio": str(self.training_audio),
             },
             "models": {
@@ -118,13 +120,19 @@ def load(path: Path) -> Config:
 
     dataset = _section(data, "dataset")
     audio = replace_path(dataset.get("audio", "dataset/audio"), root)
-    default_style = str(dataset.get("style", "") or "").strip()
     vocals_default = audio.parent / "vocals"
     vocals = replace_path(dataset.get("vocals", vocals_default), root)
     trigger = str(dataset.get("trigger", "") or "").strip()
     normalize = bool(dataset.get("normalize", False))
     prepared_default = audio.parent / "prepared-audio"
     prepared_dir = replace_path(dataset.get("prepared", prepared_default), root)
+    captioner = _optional_path(dataset, "captioner", root)
+    try:
+        caption_seconds = int(dataset.get("caption_seconds", 120) or 120)
+    except (TypeError, ValueError):
+        raise ConfigError("[dataset] caption_seconds must be a whole number")
+    if caption_seconds <= 0:
+        raise ConfigError("[dataset] caption_seconds must be positive")
 
     model = _section(data, "model")
     base = _optional_path(model, "base", root) or (models_dir / _STOCK_BASE.filename)
@@ -147,11 +155,12 @@ def load(path: Path) -> Config:
         runs_dir=runs_dir,
         trainer_dir=trainer_dir,
         audio=audio,
-        default_style=default_style,
         vocals=vocals,
         trigger=trigger,
         normalize=normalize,
         prepared_dir=prepared_dir,
+        captioner=captioner,
+        caption_seconds=caption_seconds,
         base=base,
         companion=companion,
         tokenizer=tokenizer,

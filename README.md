@@ -26,9 +26,12 @@ python3 -m pip install -e .
 # 1) 生成配置和目录骨架
 yue2-lora init
 
-# 2) 把 48 kHz WAV 放进 dataset/audio，并为每首准备 <stem>.lrc 歌词
-#    风格写在 <stem>.yue2.txt，缺失时会用 [dataset] style 补齐
-#    （见下方“数据集格式”）
+# 2) 把音频（`.wav`/`.flac`/`.mp3`/`.ogg`/`.m4a`）放进 dataset/audio，并为每首准备 <stem>.lrc 歌词
+#    <stem>.yue2.txt 可省略——缺失时会用听辨模型（MOSS-Music，"按声音描述"）自动生成
+#    （若想手动指定风格，直接放 <stem>.yue2.txt，一行纯文本即可）
+
+# 2.5) 首次使用，先安装听辨模型（约 10 GB；没有它就无法自动生成风格）
+yue2-lora caption -c config.toml --install
 
 # 3) 生成标签文件（以及可选的 48 kHz 音频）
 yue2-lora dataset -c config.toml
@@ -50,18 +53,23 @@ yue2-lora train -c config.toml --dry-run
 dataset/audio/
   my-song.wav          # 48 kHz WAV
   my-song.lrc          # 歌词（LRC，时间戳会自动去掉）
-  my-song.yue2.txt     # 一行风格（可省略，缺失时自动生成）
+  my-song.yue2.txt     # 一行风格（可省略；缺失时由听辨模型生成）
 ```
 
-每首歌的标签文件 `my-song.txt` 由 `yue2-lora dataset` 生成，你只需要提供音频、`.lrc` 和风格。
+每首歌的标签文件 `my-song.txt` 由 `yue2-lora dataset` 生成，你只需要提供音频和 `.lrc`；
+风格文件 `my-song.yue2.txt` 若不存在，会用听辨模型生成。
 `train` 只检查这些文件是否齐全，不会自动生成；缺文件时会退出并提示先运行 `yue2-lora dataset`。
 
-1. **风格**：优先读 `my-song.yue2.txt`（只有一行，例如 `indie pop, warm female vocal`）。
-   如果它不存在，会按顺序用下面的来源**先生成** `my-song.yue2.txt`：
-   - 已存在的 `my-song.txt` 里的 `caption:`；
-   - 配置里的 `[dataset] style`。
-
-   两者都没有时会报错，提示你补 `.yue2.txt` 或设置 `style`。
+1. **风格（按声音描述）**：优先读 `my-song.yue2.txt`（只有一行）。
+   若它和已有的 `my-song.txt` caption 都不存在，`dataset` 会调用 **MOSS-Music** 听这首歌，
+   与 YuE2-Studio 点击「按声音描述」的逻辑一致：
+   - `ace-caption` 让 MOSS 听音频，按固定 5 段模板输出 `genre / caption / bpm / key / signature`；
+   - 风格句由 `"<genre>. <caption>"` 组成，末尾补上 `bpm`，即 `…, 72 BPM`（与 Studio 的
+     `normalize_yue2` 完全一致）。
+   想手动覆盖，直接在 `.yue2.txt` 里写一行纯文本即可。
+   > 说明：Studio 会用 Beat This!（ONNX）修正 MOSS 猜的 BPM；纯标准库 CLI 无法跑 ONNX，
+   > 这里直接用 MOSS 在 `bpm:` 字段给出的值。Studio 的 AI 写作助手（llama.cpp）是可选增强，
+   > 没有它时 Studio 同样直接采用 MOSS 听到的描述——这正是本项目的实现。
 2. **歌词**：从 `my-song.lrc` 提取，自动去掉 `[mm:ss.xx]` 时间戳和 `[ti:]`、`[ar:]` 等元数据行；
    `[Verse]`、`[Chorus]` 这类段落标记会保留。
 3. **合并**：先生成/读取 `my-song.yue2.txt`，再写出 `my-song.txt`：
@@ -90,8 +98,9 @@ lyrics:
 | `workspace` | `dir` | 工作目录，模型、运行记录、训练器都在其下 |
 | | `models` / `runs` / `trainer` | 各子目录名 |
 | `dataset` | `audio` | 音频文件夹 |
-| | `style` | `<stem>.yue2.txt` 缺失时使用的默认一行风格 |
 | | `trigger` | 适配器唤醒词，会加进风格前缀 |
+| | `caption_seconds` | 听辨模型每首最多听多少秒（默认 120，超长取中段） |
+| | `captioner` | 指定已有 `ace-caption` 路径（默认自动查找/构建） |
 | | `vocals` | 歌词时间对齐用的 `<song>/vocals.wav` 目录（仅 `tuned` + `lyric_timing` 需要） |
 | | `normalize` | 是否用 ffmpeg 统一转 48 kHz |
 | | `prepared` | `normalize = true` 时 48 kHz 音频的输出目录 |
@@ -110,9 +119,12 @@ lyrics:
 | 命令 | 作用 |
 | --- | --- |
 | `yue2-lora init` | 生成 `config.toml` 与目录骨架 |
-| `yue2-lora download` | 下载并校验全部固定版本模型（含 companion、tokenizer），Windows 上还包括训练器 |
-| `yue2-lora doctor` | 检查数据集、模型、训练器、ffmpeg、设备 |
-| `yue2-lora dataset` | 生成 `.yue2.txt` / `.txt`，可选转 48 kHz，并校验数据集 |
+| `yue2-lora download` | 下载并校验全部固定版本模型（含 companion、tokenizer），Windows 上还包括训练器；`--with-caption` 同时拉取 MOSS-Music |
+| `yue2-lora doctor` | 检查数据集、模型、训练器、听辨模型、ffmpeg、设备 |
+| `yue2-lora caption --install` | 安装听辨模型（MOSS-Music ~10 GB）并获取 `ace-caption`（Windows 预编译 / Linux·macOS 源码构建） |
+| `yue2-lora caption --build` | 仅从固定 commit 构建 `ace-caption` |
+| `yue2-lora caption` | 查看听辨器与 MOSS 模型是否就绪 |
+| `yue2-lora dataset` | 为缺失风格生成 `.yue2.txt`（按声音描述）、写出 `.txt`，可选转 48 kHz，并校验数据集 |
 | `yue2-lora stages` | 打印 `yue2-preprocess` / `-tokenize` / `-align` / `-sheet` / `-prepare-aitk` / `-joint-train` 命令 |
 | `yue2-lora train` | 一键训练：检查数据集 → 补模型 → 跑完所有阶段 |
 | `yue2-lora train --resume` | 从最近一次运行的 checkpoint 继续训练 |
@@ -170,6 +182,7 @@ yue2-lora train --resume -c config.toml  # 从最新 optimizer.resume 继续，�
 | --- | --- |
 | `crates/music-engine/src/yue_train.rs`（Recipe、presets、train_args、training_stages、sidecars、resume_point、checkpoints） | `yue2_lora/recipe.py`、`stages.py`、`checkpoints.py` |
 | `crates/music-server/src/training.rs`（Dataset、sidecars、run 目录） | `yue2_lora/dataset.py` |
+| `crates/music-server/src/listen.rs`、`prepare.rs`（MOSS 听辨、`parse_prose`、`normalize_yue2`、`heard_style`，"按声音描述"） | `yue2_lora/caption.py` |
 | `crates/music-server/src/downloads.rs`、`model_manager.rs`（资产清单、SHA、下载） | `yue2_lora/assets.py`、`download.py` |
 | `engines/music-train-source.json`（训练器来源） | `yue2_lora/trainer.py` |
 | HTTP/UI 层 | 移除，改为 CLI + 配置 |
