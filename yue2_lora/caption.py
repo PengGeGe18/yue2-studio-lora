@@ -23,6 +23,8 @@ Notes:
 
 from __future__ import annotations
 
+import os
+import platform
 import re
 import subprocess
 import tempfile
@@ -30,14 +32,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional
 
-from .assets import (
-    LISTEN_FILES,
-    MOSS_LM,
-    TRAINER_COMMIT,
-    TRAINER_FOLDER,
-    TRAINER_REPOSITORY,
-)
-from .download import ensure_asset, find_file
+from .assets import HOTSTEP_RELEASES, LISTEN_FILES, MOSS_LM
+from .download import ensure_asset, extract_tar_gz, extract_zip, find_file
 from .util import eprint, find_on_path, is_windows, platform_key
 
 #: ``ace-caption`` is the captioner binary shipped beside the trainer.
@@ -230,76 +226,85 @@ def locate(workspace: Path, explicit: Optional[Path] = None) -> Optional[Path]:
     return Path(on_path) if on_path else None
 
 
-def install(workspace: Path, build: bool = False) -> Path:
-    """Return a usable captioner, downloading or building one when needed."""
+def install(workspace: Path, variant: Optional[str] = None) -> Path:
+    """Return a usable captioner, downloading the official prebuilt if needed."""
     found = locate(workspace)
     if found:
         return found
+    return install_release(workspace, variant)
+
+
+#: Platform defaults for the official prebuilt archives. Override with
+#: ``YUE2_CAPTION_VARIANT`` to pick CUDA 13.1, Vulkan, ROCm or the CPU build.
+DEFAULT_VARIANTS = {
+    "macos": "macos-arm64",
+    "linux": "linux-x64-cuda12.8",
+    "windows": "win-x64-cuda12.8",
+}
+
+
+def choose_variant(variant: Optional[str] = None) -> str:
+    """Pick the release variant to download for this machine."""
+    override = variant or os.environ.get("YUE2_CAPTION_VARIANT")
+    if override:
+        if override not in HOTSTEP_RELEASES:
+            raise CaptionError(
+                f"unknown YUE2_CAPTION_VARIANT {override!r}; choose one of: "
+                + ", ".join(sorted(HOTSTEP_RELEASES))
+            )
+        return override
     system = platform_key()
-    if system == "windows":
-        return install_prebuilt(workspace)
-    if build or system in ("linux", "macos"):
-        return build_from_source(workspace)
-    raise CaptionError(
-        "no ace-caption binary found; build HOT-Step's ace-caption on this machine "
-        "and set [dataset] captioner to its path"
-    )
-
-
-def install_prebuilt(workspace: Path) -> Path:
-    """Extract ``ace-caption.exe`` from the pinned HOT-Step tools archive."""
-    from . import trainer
-
-    trainer.install_prebuilt(workspace)  # same zip, same folder
-    folder = workspace / "trainer" / TRAINER_FOLDER
-    found = find_file(folder, CAPTIONER)
-    if not found:
-        raise CaptionError(f"{CAPTIONER} was not found in the HOT-Step tools archive")
-    return found
-
-
-def build_from_source(workspace: Path, jobs: Optional[int] = 1) -> Path:
-    """Build ``ace-caption`` from the pinned HOT-Step commit (Linux / macOS).
-
-    Defaults to one compile job at a time so the build's peak memory stays at
-    a single translation unit; pass a larger ``jobs`` to trade memory for speed.
-    """
-    source = workspace / "trainer" / "HOT-Step-CPP"
-    build_dir = workspace / "trainer" / "build-caption"
-    if not source.is_dir():
-        if not find_on_path("git"):
-            raise CaptionError("git is required to build the captioner")
-        eprint(f"[caption] cloning {TRAINER_REPOSITORY} at {TRAINER_COMMIT[:8]}")
-        subprocess.run(["git", "clone", TRAINER_REPOSITORY, str(source)], check=True)
-        subprocess.run(["git", "-C", str(source), "checkout", TRAINER_COMMIT], check=True)
-        subprocess.run(
-            ["git", "-C", str(source), "submodule", "update", "--init", "--recursive"],
-            check=True,
+    machine = platform.machine().lower()
+    if system == "macos" and machine not in ("arm64", "aarch64"):
+        raise CaptionError(
+            "the official HOT-Step releases ship Apple Silicon (arm64) macOS only, "
+            "so there is no prebuilt ace-caption for Intel macOS. Build it once from "
+            "https://github.com/timoncool/HOT-Step-CPP (engine/, target ace-caption) "
+            "and point [dataset] captioner at it."
         )
-    if not find_on_path("cmake"):
-        raise CaptionError("cmake is required to build the captioner")
-    build_dir.mkdir(parents=True, exist_ok=True)
-    backend = ["-DGGML_METAL=ON"] if platform_key() == "macos" else ["-DGGML_CUDA=ON",
-                                                                   "-DCMAKE_CUDA_ARCHITECTURES=native"]
-    eprint("[caption] configuring ace-caption")
-    subprocess.run(
-        ["cmake", "-S", str(source / "engine"), "-B", str(build_dir),
-         "-DCMAKE_BUILD_TYPE=Release"] + backend,
-        check=True,
-    )
-    eprint("[caption] building ace-caption")
-    command = ["cmake", "--build", str(build_dir), "--target", "ace-caption"]
-    command += ["--parallel", str(jobs)] if jobs else ["--parallel"]
-    subprocess.run(command, check=True)
-    found = find_file(build_dir, CAPTIONER)
+    try:
+        return DEFAULT_VARIANTS[system]
+    except KeyError:
+        raise CaptionError(
+            f"the official HOT-Step releases have no build for {system!r}; build "
+            "ace-caption once from https://github.com/timoncool/HOT-Step-CPP and "
+            "point [dataset] captioner at it."
+        )
+
+
+def _strip_archive_suffix(name: str) -> str:
+    for suffix in (".tar.gz", ".zip"):
+        if name.endswith(suffix):
+            return name[: -len(suffix)]
+    return name
+
+
+def install_release(workspace: Path, variant: Optional[str] = None) -> Path:
+    """Download the official prebuilt HOT-Step archive and return ``ace-caption``.
+
+    Nothing is compiled. The archive already contains ``engine/ace-caption``
+    next to its libggml libraries; extracting under ``trainer/`` keeps them
+    together, which is what the binary's ``@rpath`` needs.
+    """
+    chosen = choose_variant(variant)
+    asset = HOTSTEP_RELEASES[chosen]
+    target = workspace / "trainer"
+    target.mkdir(parents=True, exist_ok=True)
+    eprint(f"[caption] fetching prebuilt {asset.label}")
+    archive = ensure_asset(asset, target)
+    folder = target / _strip_archive_suffix(asset.filename)
+    if not folder.is_dir():
+        eprint(f"[caption] extracting into {folder}")
+        if asset.filename.endswith(".zip"):
+            extract_zip(archive, folder)
+        else:
+            extract_tar_gz(archive, folder)
+    found = find_file(folder / "engine", CAPTIONER) or find_file(folder, CAPTIONER)
     if not found:
-        raise CaptionError("the build finished but ace-caption was not found")
-    destination = workspace / "trainer" / CAPTIONER
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    destination.write_bytes(found.read_bytes())
+        raise CaptionError(f"{CAPTIONER} was not found in {archive}")
     if not is_windows():
-        destination.chmod(0o755)
-    return destination
+        found.chmod(0o755)
+    return found
 
 
 # -- the captioner models --------------------------------------------------

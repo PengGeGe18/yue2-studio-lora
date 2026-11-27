@@ -160,8 +160,8 @@ def cmd_download(args: argparse.Namespace) -> int:
     if args.with_caption:
         moss = caption_mod.models_dir(config.workspace)
         caption_mod.ensure_models(moss)
-        if platform_key() == "windows":
-            caption_mod.install_prebuilt(config.workspace)
+        if caption_mod.locate(config.workspace) is None:
+            caption_mod.install(config.workspace)
     if platform_key() == "windows" and not args.no_trainer:
         _ensure_trainer(config, build=False)
     eprint("all files verified")
@@ -290,10 +290,6 @@ def cmd_caption(args: argparse.Namespace) -> int:
     config = _config(args)
     moss = caption_mod.models_dir(config.workspace)
     try:
-        if args.build:
-            binary = caption_mod.build_from_source(config.workspace)
-            print(binary)
-            return 0
         if args.install:
             binary = caption_mod.install(config.workspace)
             eprint(f"[caption] downloading MOSS-Music into {moss}")
@@ -604,8 +600,7 @@ def build_parser() -> argparse.ArgumentParser:
     dataset.set_defaults(func=cmd_dataset)
 
     caption = with_config("caption", "install the captioner and describe songs by ear")
-    caption.add_argument("--install", action="store_true", help="download MOSS-Music and get ace-caption")
-    caption.add_argument("--build", action="store_true", help="build ace-caption from the pinned source")
+    caption.add_argument("--install", action="store_true", help="download the official prebuilt ace-caption and MOSS-Music")
     caption.set_defaults(func=cmd_caption)
 
     stages = with_config("stages", "print the trainer commands without running them")

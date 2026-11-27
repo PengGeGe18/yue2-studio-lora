@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import tarfile
 import time
 import urllib.error
 import urllib.request
@@ -140,6 +141,19 @@ def extract_zip(archive: Path, destination: Path) -> Path:
             if root not in target.parents and target != root:
                 raise DownloadError(f"unsafe path in {archive}: {member.filename}")
             bundle.extract(member, destination)
+    return destination
+
+
+def extract_tar_gz(archive: Path, destination: Path) -> Path:
+    """Extract a ``.tar.gz`` under ``destination``, refusing path escapes."""
+    destination.mkdir(parents=True, exist_ok=True)
+    root = destination.resolve()
+    with tarfile.open(archive, "r:gz") as bundle:
+        for member in bundle.getmembers():
+            target = (destination / member.name).resolve()
+            if root not in target.parents and target != root:
+                raise DownloadError(f"unsafe path in {archive}: {member.name}")
+        bundle.extractall(destination)
     return destination
 
 

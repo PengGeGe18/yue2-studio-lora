@@ -71,11 +71,13 @@ dataset/audio/
    > 这里直接用 MOSS 在 `bpm:` 字段给出的值。Studio 的 AI 写作助手（llama.cpp）是可选增强，
    > 没有它时 Studio 同样直接采用 MOSS 听到的描述——这正是本项目的实现。
    >
-   > **安装提示**：`--install` 在 Windows 上从 tools 包解压现成的 `ace-caption.exe`，内存很低；
-   > 在 Linux/macOS 上若本地没有二进制，会用 cmake 从源码**编译**，编译阶段才吃内存；
-   > 自动构建已默认 `--parallel 1`（峰值约等于单个编译单元，最省内存、稍慢）。
-   > 模型权重始终直接来自 HuggingFace（Q8_0），下载为流式写盘、低内存。
-   > 想更快可手动用更大并行度构建 `ace-caption`，再用 `[dataset] captioner` 指向它。
+   > **安装提示**：`--install` 直接下载官方预编译包（`scragnog/HOT-Step-CPP` release `v1.6.0`，
+   > timoncool README 的 “Download the latest release” 就指向它），解压出与 libggml 同目录的
+   > `engine/ace-caption`，**代码里不做源码编译**。模型权重始终来自 HuggingFace（Q8_0，流式下载）。
+   > 平台默认：macOS Apple Silicon → Metal；Linux/Windows x64 → CUDA 12.8。
+   > 其他后端用环境变量 `YUE2_CAPTION_VARIANT` 选择，例如 `linux-x64-cuda13.1`、
+   > `linux-x64-vulkan`、`linux-x64-rocm`、`win-x64-vulkan`、`*-cpu`。
+   > Intel macOS 没有官方预编译，需手动构建一次，并用 `[dataset] captioner` 指向它。
 2. **歌词**：从 `my-song.lrc` 提取，自动去掉 `[mm:ss.xx]` 时间戳和 `[ti:]`、`[ar:]` 等元数据行；
    `[Verse]`、`[Chorus]` 这类段落标记会保留。
 3. **合并**：先生成/读取 `my-song.yue2.txt`，再写出 `my-song.txt`：
@@ -106,7 +108,7 @@ lyrics:
 | `dataset` | `audio` | 音频文件夹 |
 | | `trigger` | 适配器唤醒词，会加进风格前缀 |
 | | `caption_seconds` | 听辨模型每首最多听多少秒（默认 120，超长取中段） |
-| | `captioner` | 指定已有 `ace-caption` 路径（默认自动查找/构建） |
+| | `captioner` | 指定已有 `ace-caption` 路径（默认自动查找/下载官方预编译） |
 | | `vocals` | 歌词时间对齐用的 `<song>/vocals.wav` 目录（仅 `tuned` + `lyric_timing` 需要） |
 | | `normalize` | 是否用 ffmpeg 统一转 48 kHz |
 | | `prepared` | `normalize = true` 时 48 kHz 音频的输出目录 |
@@ -127,8 +129,7 @@ lyrics:
 | `yue2-lora init` | 生成 `config.toml` 与目录骨架 |
 | `yue2-lora download` | 下载并校验全部固定版本模型（含 companion、tokenizer），Windows 上还包括训练器；`--with-caption` 同时拉取 MOSS-Music |
 | `yue2-lora doctor` | 检查数据集、模型、训练器、听辨模型、ffmpeg、设备 |
-| `yue2-lora caption --install` | 安装听辨模型（MOSS-Music ~10 GB）并获取 `ace-caption`（Windows 预编译 / Linux·macOS 源码构建） |
-| `yue2-lora caption --build` | 仅从固定 commit 构建 `ace-caption` |
+| `yue2-lora caption --install` | 下载官方预编译 `ace-caption`（HOT-Step v1.6.0）与 MOSS-Music（~10 GB） |
 | `yue2-lora caption` | 查看听辨器与 MOSS 模型是否就绪 |
 | `yue2-lora dataset` | 为缺失风格生成 `.yue2.txt`（按声音描述）、写出 `.txt`，可选转 48 kHz，并校验数据集 |
 | `yue2-lora stages` | 打印 `yue2-preprocess` / `-tokenize` / `-align` / `-sheet` / `-prepare-aitk` / `-joint-train` 命令 |
@@ -177,6 +178,20 @@ yue2-lora train --resume -c config.toml  # 从最新 optimizer.resume 继续，�
 | Windows x64 | 自动下载 YuE2-Studio 预编译 `hotstep-tools-…-cuda-windows-x64.zip`（`music-train.exe`） | 需 NVIDIA 显卡与 CUDA 运行库 |
 | Linux | `yue2-lora trainer --build` 从固定 commit 克隆 HOT-Step-CPP 并用 CMake + CUDA 构建 `ace-train` | 需要 `git`、`cmake`、CUDA Toolkit |
 | macOS | 本工具可正常运行，但联合训练内核依赖 CUDA，无法本地构建 | 在 CUDA 机器上构建后，用 `[train] trainer` 指向该二进制 |
+
+### 为什么听辨器不编译、训练器仍可能需要编译
+
+- **听辨器 `ace-caption`：改为不编译。** 官方 `v1.6.0` 预编译包覆盖 macOS(ARM) / Linux x64 /
+  Windows x64 的各后端，包内含 `engine/ace-caption` 及其 `libggml*` 依赖；实测其 `--help`
+  与本项目调用参数完全一致，因此直接下载解压使用。
+- **训练器 `ace-train`：确实需要编译，原因如下。**
+  1. 本项目钉的是 `timoncool/HOT-Step-CPP@479cbeb8`，而 YuE2-Studio 只提供该 commit 的
+     **Windows** 预编译包，Linux 没有对应产物。
+  2. 官方 `v1.6.0` 的 `ace-train` 已改为子命令式（`preprocess` / `train-lm` / `train-dit` /
+     `mm3-*` 等），与本项目固定 commit 使用的命令行**不兼容**，不能直接替换。
+  3. YuE2 的联合训练损失仅 CUDA 可用，Linux 上还需按本机 GPU 架构编译。
+  若希望完全避免编译，可在 CUDA 机器上构建一次，再用 `[train] trainer` 指向该二进制
+  （Windows 已自动使用预编译 `music-train.exe`）。
 
 模型下载、配置解析、数据准备、命令编排、checkpoint 管理在所有平台一致。
 

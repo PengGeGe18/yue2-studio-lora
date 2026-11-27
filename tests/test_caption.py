@@ -116,5 +116,30 @@ class CaptionRunTests(unittest.TestCase):
         self.assertNotIn("--encoder-window", argv)
 
 
+class ReleaseTests(unittest.TestCase):
+    def test_every_release_asset_is_pinned(self):
+        from yue2_lora.assets import HOTSTEP_RELEASES
+
+        for qualifier, asset in HOTSTEP_RELEASES.items():
+            with self.subTest(qualifier=qualifier):
+                self.assertTrue(asset.url.endswith(asset.filename))
+                self.assertGreater(asset.bytes, 0)
+                self.assertEqual(len(asset.sha256), 64)
+                self.assertEqual(asset.sha256, asset.sha256.lower())
+
+    def test_variant_env_override_and_unknown(self):
+        os.environ["YUE2_CAPTION_VARIANT"] = "linux-x64-cpu"
+        try:
+            self.assertEqual(caption.choose_variant(), "linux-x64-cpu")
+        finally:
+            del os.environ["YUE2_CAPTION_VARIANT"]
+        with self.assertRaises(CaptionError):
+            caption.choose_variant("no-such-build")
+
+    def test_default_variant_matches_this_machine(self):
+        variant = caption.choose_variant()
+        self.assertIn(variant, {"macos-arm64", "linux-x64-cuda12.8", "win-x64-cuda12.8"})
+
+
 if __name__ == "__main__":
     unittest.main()

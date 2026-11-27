@@ -39,6 +39,13 @@ TRAINER_REPOSITORY = "https://github.com/timoncool/HOT-Step-CPP.git"
 TRAINER_COMMIT = "479cbeb8f5e7de98f85f2ac8c3da305cb73839e8"
 TRAINER_FOLDER = TRAINER_RELEASE_TAG
 
+#: Official HOT-Step builds. The timoncool README's "Download the latest
+#: release" points at this repo; v1.6.0 is the release these pins were checked
+#: against. Each archive carries ``engine/ace-caption`` beside its libggml
+#: libraries, so the captioner runs straight from the extracted folder.
+HOTSTEP_REPOSITORY = "scragnog/HOT-Step-CPP"
+HOTSTEP_RELEASE_TAG = "v1.6.0"
+
 #: Video memory the default recipe needs, in GB.
 MIN_VRAM_GB = 11
 
@@ -166,6 +173,74 @@ LISTEN_FILES = [MOSS_LM, MOSS_AUDIO]
 
 def listen_assets() -> list[Asset]:
     return list(LISTEN_FILES)
+
+
+def _hotstep(qualifier: str, name: str, size: int, sha256: str) -> Asset:
+    return Asset(
+        id=f"hotstep-{qualifier}",
+        label=f"HOT-Step {HOTSTEP_RELEASE_TAG} ({qualifier})",
+        filename=name,
+        url=f"https://github.com/{HOTSTEP_REPOSITORY}/releases/download/{HOTSTEP_RELEASE_TAG}/{name}",
+        bytes=size,
+        sha256=sha256.lower(),
+    )
+
+
+#: Platform/back-end builds of the official HOT-Step release, keyed by the
+#: qualifier used in the file name (also the value of ``YUE2_CAPTION_VARIANT``).
+HOTSTEP_RELEASES = {
+    "macos-arm64": _hotstep(
+        "macos-arm64", "HOT-Step-CPP-v1.6.0-macOS-arm64.tar.gz",
+        113_467_299, "6b83cdde008efbb78c3d06ee2aa058e6c0907bcb6472420b512216e58574c991",
+    ),
+    "linux-x64-cpu": _hotstep(
+        "linux-x64-cpu", "HOT-Step-CPP-v1.6.0-linux-x64-cpu.tar.gz",
+        146_749_924, "c4c675203fbbe8247e6500ef651be6ee999a58b22ac3d22d1566f087bbf58a00",
+    ),
+    "linux-x64-cuda12.8": _hotstep(
+        "linux-x64-cuda12.8", "HOT-Step-CPP-v1.6.0-linux-x64-cuda12.8.tar.gz",
+        293_983_608, "7d67cf8414fadc8f46b2a0ac62697936f5760b8d2821e136336cb97748ee08c3",
+    ),
+    "linux-x64-cuda13.1": _hotstep(
+        "linux-x64-cuda13.1", "HOT-Step-CPP-v1.6.0-linux-x64-cuda13.1.tar.gz",
+        292_017_456, "0cee77f42bf46b2dd00bebcb7dc39be0907f659407de93027222a0c2ad9a77f7",
+    ),
+    "linux-x64-vulkan": _hotstep(
+        "linux-x64-vulkan", "HOT-Step-CPP-v1.6.0-linux-x64-vulkan.tar.gz",
+        159_579_204, "a60ce5589ff0400d71d85bfbe1f4d121dee06982c3d3dec158def80ccb5842ef",
+    ),
+    "linux-x64-rocm": _hotstep(
+        "linux-x64-rocm", "HOT-Step-CPP-v1.6.0-linux-x64-rocm.tar.gz",
+        218_156_757, "27bab11b0268a452925c4c2af2cdd3e64881b7d5edd8dd0c91e3a5c8aa6ed5d8",
+    ),
+    "win-x64-cpu": _hotstep(
+        "win-x64-cpu", "HOT-Step-CPP-v1.6.0-win-x64-cpu.zip",
+        159_879_596, "1543439466a4ff42e982346842a30753ffdb8790327f43a71faf783cab205a23",
+    ),
+    "win-x64-cuda12.8": _hotstep(
+        "win-x64-cuda12.8", "HOT-Step-CPP-v1.6.0-win-x64-cuda12.8.zip",
+        305_759_165, "295bf806ea881ae04ea267c94ed5041e883cc359304c187c2b1d45b83046f3f1",
+    ),
+    "win-x64-cuda13.1": _hotstep(
+        "win-x64-cuda13.1", "HOT-Step-CPP-v1.6.0-win-x64-cuda13.1.zip",
+        303_553_960, "7073d3cc84961da3e8d4e5478442e353d250cae96e60cf24a74a56acd6b48fc1",
+    ),
+    "win-x64-vulkan": _hotstep(
+        "win-x64-vulkan", "HOT-Step-CPP-v1.6.0-win-x64-vulkan.zip",
+        172_945_240, "9961472558eb63581ecf7fd689a5c187934d25bcd8c84817bbd461921a22d8f7",
+    ),
+}
+
+
+def captioner_release(qualifier: str) -> Asset:
+    """The official prebuilt archive for ``qualifier`` (e.g. ``macos-arm64``)."""
+    try:
+        return HOTSTEP_RELEASES[qualifier]
+    except KeyError:
+        raise KeyError(
+            f"unknown HOT-Step variant {qualifier!r}; available: "
+            + ", ".join(sorted(HOTSTEP_RELEASES))
+        )
 
 
 
