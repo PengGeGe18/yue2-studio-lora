@@ -72,9 +72,10 @@ dataset/audio/
    > 没有它时 Studio 同样直接采用 MOSS 听到的描述——这正是本项目的实现。
    >
    > **安装提示**：`--install` 在 Windows 上从 tools 包解压现成的 `ace-caption.exe`，内存很低；
-   > 在 Linux/macOS 上若本地没有二进制，会用 cmake 从源码**编译**，编译阶段才吃内存。
-   > 模型权重始终直接来自 HuggingFace（Q8_0），下载为流式写盘、低内存。想避免编译内存峰值，
-   > 可手动用较小并行度构建 `ace-caption`，再用 `[dataset] captioner` 指向它。
+   > 在 Linux/macOS 上若本地没有二进制，会用 cmake 从源码**编译**，编译阶段才吃内存；
+   > 自动构建已默认 `--parallel 1`（峰值约等于单个编译单元，最省内存、稍慢）。
+   > 模型权重始终直接来自 HuggingFace（Q8_0），下载为流式写盘、低内存。
+   > 想更快可手动用更大并行度构建 `ace-caption`，再用 `[dataset] captioner` 指向它。
 2. **歌词**：从 `my-song.lrc` 提取，自动去掉 `[mm:ss.xx]` 时间戳和 `[ti:]`、`[ar:]` 等元数据行；
    `[Verse]`、`[Chorus]` 这类段落标记会保留。
 3. **合并**：先生成/读取 `my-song.yue2.txt`，再写出 `my-song.txt`：

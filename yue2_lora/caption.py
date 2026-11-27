@@ -258,8 +258,12 @@ def install_prebuilt(workspace: Path) -> Path:
     return found
 
 
-def build_from_source(workspace: Path, jobs: Optional[int] = None) -> Path:
-    """Build ``ace-caption`` from the pinned HOT-Step commit (Linux / macOS)."""
+def build_from_source(workspace: Path, jobs: Optional[int] = 1) -> Path:
+    """Build ``ace-caption`` from the pinned HOT-Step commit (Linux / macOS).
+
+    Defaults to one compile job at a time so the build's peak memory stays at
+    a single translation unit; pass a larger ``jobs`` to trade memory for speed.
+    """
     source = workspace / "trainer" / "HOT-Step-CPP"
     build_dir = workspace / "trainer" / "build-caption"
     if not source.is_dir():
