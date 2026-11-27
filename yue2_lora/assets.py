@@ -30,15 +30,6 @@ TOKENIZER_REVISION = "e630f2b8f6aedf8254c3186438633c1b5eeaf80a"
 MOSS_REPOSITORY = "scragnog/MOSS-Music-8B-Instruct-GGUF"
 MOSS_REVISION = "9fe86435bd542bf29cbf4984e9e0ab0ea8ca7e00"
 
-#: Prebuilt trainer release from YuE2-Studio (Windows x64 + CUDA).
-TRAINER_RELEASE_TAG = "hotstep-tools-479cbeb8-xcr0"
-TRAINER_ASSET = "hotstep-tools-479cbeb8-xcr0-cuda-windows-x64.zip"
-TRAINER_ASSET_BYTES = 125_490_974
-TRAINER_SHIPPED_AS = "music-train.exe"
-TRAINER_REPOSITORY = "https://github.com/timoncool/HOT-Step-CPP.git"
-TRAINER_COMMIT = "479cbeb8f5e7de98f85f2ac8c3da305cb73839e8"
-TRAINER_FOLDER = TRAINER_RELEASE_TAG
-
 #: Official HOT-Step builds. The timoncool README's "Download the latest
 #: release" points at this repo; v1.6.0 is the release these pins were checked
 #: against. Each archive carries ``engine/ace-caption`` beside its libggml
@@ -138,16 +129,6 @@ TOKENIZER = Asset(
     url=_huggingface(TOKENIZER_REPOSITORY, TOKENIZER_REVISION, "YuE2-3B-Q5_K_M.gguf"),
     bytes=2_622_936_832,
     sha256="cd3efd250b734a229172800f08f33a893ad1f66b521666e176cdae4a0729b281",
-)
-
-#: The prebuilt trainer archive (Windows only). The same archive also ships
-#: ``ace-caption.exe``, the MOSS captioner that describes a song by ear.
-TRAINER = Asset(
-    id="music-train",
-    label=f"Trainer (HOT-Step {TRAINER_COMMIT[:8]})",
-    filename=TRAINER_ASSET,
-    url=f"https://github.com/timoncool/YuE2-Studio/releases/download/{TRAINER_RELEASE_TAG}/{TRAINER_ASSET}",
-    bytes=TRAINER_ASSET_BYTES,
 )
 
 #: MOSS-Music-8B weights the captioner reads, stored flat in ``models/moss``.

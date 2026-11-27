@@ -33,7 +33,7 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Optional
 
 from .assets import HOTSTEP_RELEASES, LISTEN_FILES, MOSS_LM
-from .download import ensure_asset, extract_tar_gz, extract_zip, find_file
+from .download import archive_stem, ensure_asset, extract_archive, find_file
 from .util import eprint, find_on_path, is_windows, platform_key
 
 #: ``ace-caption`` is the captioner binary shipped beside the trainer.
@@ -272,13 +272,6 @@ def choose_variant(variant: Optional[str] = None) -> str:
         )
 
 
-def _strip_archive_suffix(name: str) -> str:
-    for suffix in (".tar.gz", ".zip"):
-        if name.endswith(suffix):
-            return name[: -len(suffix)]
-    return name
-
-
 def install_release(workspace: Path, variant: Optional[str] = None) -> Path:
     """Download the official prebuilt HOT-Step archive and return ``ace-caption``.
 
@@ -292,13 +285,10 @@ def install_release(workspace: Path, variant: Optional[str] = None) -> Path:
     target.mkdir(parents=True, exist_ok=True)
     eprint(f"[caption] fetching prebuilt {asset.label}")
     archive = ensure_asset(asset, target)
-    folder = target / _strip_archive_suffix(asset.filename)
+    folder = target / archive_stem(asset.filename)
     if not folder.is_dir():
         eprint(f"[caption] extracting into {folder}")
-        if asset.filename.endswith(".zip"):
-            extract_zip(archive, folder)
-        else:
-            extract_tar_gz(archive, folder)
+        extract_archive(archive, folder)
     found = find_file(folder / "engine", CAPTIONER) or find_file(folder, CAPTIONER)
     if not found:
         raise CaptionError(f"{CAPTIONER} was not found in {archive}")

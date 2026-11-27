@@ -157,6 +157,21 @@ def extract_tar_gz(archive: Path, destination: Path) -> Path:
     return destination
 
 
+def archive_stem(name: str) -> str:
+    """``foo.tar.gz`` / ``foo.zip`` -> ``foo``."""
+    for suffix in (".tar.gz", ".zip"):
+        if name.endswith(suffix):
+            return name[: -len(suffix)]
+    return name
+
+
+def extract_archive(archive: Path, destination: Path) -> Path:
+    """Extract a ``.zip`` or ``.tar.gz`` by extension."""
+    if archive.name.endswith(".zip"):
+        return extract_zip(archive, destination)
+    return extract_tar_gz(archive, destination)
+
+
 def find_file(folder: Path, name: str) -> Optional[Path]:
     """Find ``name`` anywhere under ``folder`` (case-insensitive on Windows)."""
     wanted = name.lower() if os.name == "nt" else name

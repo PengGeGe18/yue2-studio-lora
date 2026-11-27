@@ -162,8 +162,8 @@ def cmd_download(args: argparse.Namespace) -> int:
         caption_mod.ensure_models(moss)
         if caption_mod.locate(config.workspace) is None:
             caption_mod.install(config.workspace)
-    if platform_key() == "windows" and not args.no_trainer:
-        _ensure_trainer(config, build=False)
+    if platform_key() in ("windows", "linux") and not args.no_trainer:
+        _ensure_trainer(config)
     eprint("all files verified")
     return 0
 
@@ -213,7 +213,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
             print(f"  error: {error}")
             ok = False
     else:
-        print("trainer:   not installed (yue2-lora train installs or builds it)")
+        print("trainer:   not installed (yue2-lora train downloads it)")
 
     captioner = caption_mod.locate(config.workspace, config.captioner)
     moss = caption_mod.models_dir(config.workspace)
@@ -400,8 +400,8 @@ def _recipe_for(config: Config, songs: int) -> Recipe:
     return recipe
 
 
-def _ensure_trainer(config: Config, build: bool) -> Path:
-    return trainer_mod.ensure(config.workspace, config.trainer, build=build)
+def _ensure_trainer(config: Config) -> Path:
+    return trainer_mod.ensure(config.workspace, config.trainer)
 
 
 def _run_name(config: Config) -> str:
@@ -429,7 +429,7 @@ def cmd_train(args: argparse.Namespace) -> int:
 
         # Resolve the trainer first so an unsupported machine fails before a
         # multi-gigabyte download starts.
-        trainer = _ensure_trainer(config, build=args.build_trainer)
+        trainer = _ensure_trainer(config)
         models = _ensure_models(config, recipe.lyric_timing)
         run_dir = Path(args.run) if args.run else config.runs_dir / _run_name(config)
         ensure_dir(run_dir)
@@ -463,7 +463,7 @@ def _resume(config: Config, args: argparse.Namespace) -> int:
         return 1
     recipe = Recipe.from_dict(state.get("recipe", {}))
     recipe.check()
-    trainer = _ensure_trainer(config, build=args.build_trainer)
+    trainer = _ensure_trainer(config)
     models = _ensure_models(config, recipe.lyric_timing)
     inputs = _inputs(config, recipe, run_dir, models)
     output = next_output_dir(run_dir)
@@ -538,14 +538,15 @@ def _finish(run_dir: Path, recipe: Recipe) -> None:
 def cmd_trainer(args: argparse.Namespace) -> int:
     config = _config(args)
     try:
-        if args.build:
-            path = trainer_mod.build_from_source(config.workspace)
-        elif args.install:
-            path = trainer_mod.install_prebuilt(config.workspace)
+        if args.install:
+            path = trainer_mod.ensure(config.workspace, config.trainer)
         else:
             path = trainer_mod.locate(config.workspace, config.trainer)
             if path is None:
-                eprint("no trainer found; pass --install (Windows) or --build, or set train.trainer")
+                eprint(
+                    "no trainer found; run --install to fetch the official prebuilt "
+                    "(Linux/Windows CUDA), or set train.trainer"
+                )
                 return 1
         print(path)
         if args.probe:
@@ -614,12 +615,10 @@ def build_parser() -> argparse.ArgumentParser:
     train.add_argument("--run", help="run folder (a new one by default)")
     train.add_argument("--resume", action="store_true", help="continue the latest run")
     train.add_argument("--dry-run", action="store_true", help="print the commands only")
-    train.add_argument("--build-trainer", action="store_true", help="build ace-train if missing")
     train.set_defaults(func=cmd_train)
 
-    trainer = with_config("trainer", "locate, install or build the ace-train helper")
-    trainer.add_argument("--install", action="store_true", help="download the prebuilt Windows trainer")
-    trainer.add_argument("--build", action="store_true", help="build ace-train from the pinned source")
+    trainer = with_config("trainer", "locate or install the ace-train helper")
+    trainer.add_argument("--install", action="store_true", help="download the official prebuilt ace-train (Linux/Windows CUDA)")
     trainer.add_argument("--probe", action="store_true", help="run --help to check the binary")
     trainer.set_defaults(func=cmd_trainer)
 

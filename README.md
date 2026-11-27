@@ -5,7 +5,7 @@
 - 无 Web 界面、无服务端，只有 CLI 和配置文件
 - 训练配方（fast / balanced / thorough / tuned）、数据准备阶段、断点续训与 YuE2-Studio 完全一致
 - 内置模型自动下载：Hugging Face 固定 revision + SHA-256 校验 + 断点续传
-- 多平台：Windows 自动获取预编译训练器；Linux 自动从固定 commit 构建；macOS 可运行本工具，但联合训练内核仅支持 CUDA
+- 多平台：Linux / Windows x64 自动下载官方预编译 `ace-train`（CUDA）；**代码中不再编译**；macOS 可跑数据准备/听辨，但联合训练内核仅支持 CUDA，运行时会明确提示
 - 纯 Python 标准库实现，无第三方依赖（Python ≥ 3.8）
 
 > 说明：YuE2-Studio 里的“LoRA 训练逻辑”分为两层。真正的训练内核是
@@ -127,7 +127,7 @@ lyrics:
 | 命令 | 作用 |
 | --- | --- |
 | `yue2-lora init` | 生成 `config.toml` 与目录骨架 |
-| `yue2-lora download` | 下载并校验全部固定版本模型（含 companion、tokenizer），Windows 上还包括训练器；`--with-caption` 同时拉取 MOSS-Music |
+| `yue2-lora download` | 下载并校验全部固定版本模型（含 companion、tokenizer）；Linux/Windows 上还包括预编译训练器；`--with-caption` 同时拉取 MOSS-Music |
 | `yue2-lora doctor` | 检查数据集、模型、训练器、听辨模型、ffmpeg、设备 |
 | `yue2-lora caption --install` | 下载官方预编译 `ace-caption`（HOT-Step v1.6.0）与 MOSS-Music（~10 GB） |
 | `yue2-lora caption` | 查看听辨器与 MOSS 模型是否就绪 |
@@ -136,7 +136,7 @@ lyrics:
 | `yue2-lora train` | 一键训练：检查数据集 → 补模型 → 跑完所有阶段 |
 | `yue2-lora train --resume` | 从最近一次运行的 checkpoint 继续训练 |
 | `yue2-lora checkpoints` | 列出运行产出的 checkpoint 与可续训点 |
-| `yue2-lora trainer --install/--build` | 单独安装（Windows 预编译）或构建（Linux 源码）训练器 |
+| `yue2-lora trainer --install` | 下载官方预编译训练器（Linux/Windows x64 CUDA，HOT-Step v1.6.0） |
 | `yue2-lora info` | 打印合并后的有效配置 |
 
 ## 训练流程
@@ -175,23 +175,33 @@ yue2-lora train --resume -c config.toml  # 从最新 optimizer.resume 继续，�
 
 | 平台 | 训练器来源 | 说明 |
 | --- | --- | --- |
-| Windows x64 | 自动下载 YuE2-Studio 预编译 `hotstep-tools-…-cuda-windows-x64.zip`（`music-train.exe`） | 需 NVIDIA 显卡与 CUDA 运行库 |
-| Linux | `yue2-lora trainer --build` 从固定 commit 克隆 HOT-Step-CPP 并用 CMake + CUDA 构建 `ace-train` | 需要 `git`、`cmake`、CUDA Toolkit |
-| macOS | 本工具可正常运行，但联合训练内核依赖 CUDA，无法本地构建 | 在 CUDA 机器上构建后，用 `[train] trainer` 指向该二进制 |
+| Linux x64 | 自动下载官方预编译 `HOT-Step-CPP-v1.6.0-linux-x64-cuda12.8.tar.gz` 中的 `engine/ace-train` | 需 NVIDIA 显卡 + 匹配的 CUDA 运行库；可换 `-cuda13.1` |
+| Windows x64 | 自动下载官方预编译 `HOT-Step-CPP-v1.6.0-win-x64-cuda12.8.zip` 中的 `engine/ace-train.exe` | 同上；可换 `-cuda13.1` |
+| macOS（Apple Silicon / Intel） | **不可训练** | 联合训练损失仅 CUDA 可用；运行时会明确提示。数据准备、听辨、`stages` 仍可正常用 |
+| Linux ARM 等非 x64 | **无官方预编译** | 运行时报错并提示手动构建后用 `[train] trainer` 指定 |
 
-### 为什么听辨器不编译、训练器仍可能需要编译
+### 关于编译
 
-- **听辨器 `ace-caption`：改为不编译。** 官方 `v1.6.0` 预编译包覆盖 macOS(ARM) / Linux x64 /
-  Windows x64 的各后端，包内含 `engine/ace-caption` 及其 `libggml*` 依赖；实测其 `--help`
-  与本项目调用参数完全一致，因此直接下载解压使用。
-- **训练器 `ace-train`：确实需要编译，原因如下。**
-  1. 本项目钉的是 `timoncool/HOT-Step-CPP@479cbeb8`，而 YuE2-Studio 只提供该 commit 的
-     **Windows** 预编译包，Linux 没有对应产物。
-  2. 官方 `v1.6.0` 的 `ace-train` 已改为子命令式（`preprocess` / `train-lm` / `train-dit` /
-     `mm3-*` 等），与本项目固定 commit 使用的命令行**不兼容**，不能直接替换。
-  3. YuE2 的联合训练损失仅 CUDA 可用，Linux 上还需按本机 GPU 架构编译。
-  若希望完全避免编译，可在 CUDA 机器上构建一次，再用 `[train] trainer` 指向该二进制
-  （Windows 已自动使用预编译 `music-train.exe`）。
+**本项目代码里不再编译任何东西。** `ace-caption` 与 `ace-train` 都从官方预编译包下载、
+按 SHA-256 校验后解压使用：
+
+- 默认后端：Linux/Windows x64 → CUDA 12.8；可用环境变量
+  `YUE2_TRAIN_VARIANT` / `YUE2_CAPTION_VARIANT` 选择 `*-cuda13.1`（听辨还可选 Vulkan/ROCm/CPU）。
+- 预编译版本为 HOT-Step `v1.6.0`。其 `ace-train` 提供了本项目调用的全部 `yue2-*` 子命令
+  （`yue2-preprocess` / `yue2-tokenize` / `yue2-align` / `yue2-sheet` / `yue2-prepare-aitk` /
+  `yue2-joint-train`），参数面一致。
+
+**唯一需要你手动编译的情形（已在运行时提示，不在代码里做）：**
+
+1. **平台/架构无官方产物**：如 Linux ARM、Intel macOS，官方 release 只提供 x64（macOS 为
+   Apple Silicon）CUDA/Metal 构建。
+2. **需要与 Studio 固定 commit 完全同源的训练数值**：预编译是 `v1.6.0`（`335e378` 一系），
+   与本项目钉的 `479cbeb8` 命令行兼容、但训练数值可能有细微漂移。
+
+上面两种情况，请自行在 CUDA 机器上构建一次 `ace-train`，再用 `[train] trainer` 指向它。
+为什么不在代码里自动编译：训练损失仅 CUDA 可用；主流平台已有预编译，自动编译会给大多数用户
+带来 GB 级工具链、长时间与高内存开销；CUDA 版本/后端也应由用户按驱动自行决定。
+若需核对版本差异，可用 `ace-train --fixture-replay <dir>` 对拍同一固定步的指标。
 
 模型下载、配置解析、数据准备、命令编排、checkpoint 管理在所有平台一致。
 
