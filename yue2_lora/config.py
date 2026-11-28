@@ -123,7 +123,7 @@ def load(path: Path) -> Config:
     vocals_default = audio.parent / "vocals"
     vocals = replace_path(dataset.get("vocals", vocals_default), root)
     trigger = str(dataset.get("trigger", "") or "").strip()
-    normalize = bool(dataset.get("normalize", False))
+    normalize = bool(dataset.get("normalize", True))
     prepared_default = audio.parent / "prepared-audio"
     prepared_dir = replace_path(dataset.get("prepared", prepared_default), root)
     captioner = _optional_path(dataset, "captioner", root)

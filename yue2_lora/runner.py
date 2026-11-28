@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Iterable, List, Optional
 
 from .stages import Stage
-from .util import eprint, quote
+from .util import eprint, gpu_env, quote
 
 
 class StageFailed(RuntimeError):
@@ -57,6 +57,7 @@ def run_stage(trainer: Path, stage: Stage, total_steps: Optional[int] = None) ->
         text=True,
         bufsize=1,
         universal_newlines=True,
+        env=gpu_env(trainer),
     )
     assert process.stdout is not None
     last_progress = False

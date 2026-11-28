@@ -52,9 +52,9 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.models_dir, (root / "models").resolve())
         self.assertEqual(config.vocals, (root / "dataset" / "vocals").resolve())
         self.assertEqual(config.recipe.preset, "thorough")
-        self.assertFalse(config.normalize)
+        self.assertTrue(config.normalize)
         self.assertEqual(config.prepared_dir, (root / "dataset" / "prepared-audio").resolve())
-        self.assertEqual(config.training_audio, config.audio)
+        self.assertEqual(config.training_audio, config.prepared_dir)
         self.assertEqual(config.caption_seconds, 120)
         self.assertIsNone(config.captioner)
 

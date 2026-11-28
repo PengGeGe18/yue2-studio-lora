@@ -25,9 +25,16 @@ from .dataset import (
 )
 from .download import DownloadError, ensure_asset
 from .recipe import Recipe
-from .runner import print_stages, run_stage, run_stages
+from .runner import StageFailed, print_stages, run_stage, run_stages
 from .stages import TrainingInputs, continuation_stage, training_stages
-from .util import ensure_dir, eprint, find_on_path, human_bytes, platform_key
+from .util import (
+    GpuUnavailable,
+    ensure_dir,
+    eprint,
+    find_on_path,
+    human_bytes,
+    platform_key,
+)
 
 CONFIG_TEMPLATE = """\
 # yue2-lora configuration. Paths are relative to this file.
@@ -46,7 +53,7 @@ audio = "dataset/audio"   # 48 kHz WAV files, each with a <stem>.lrc lyrics file
 # caption_seconds = 120   # how much of a long song the captioner hears
 trigger = "sks"           # rare word the adapter learns to answer to
 # vocals = "dataset/vocals"       # <song>/vocals.wav, only for lyric timing
-normalize = false         # true: convert to 48 kHz with ffmpeg
+normalize = true          # convert to 48 kHz with ffmpeg (default)
 # prepared = "dataset/prepared-audio"   # 48 kHz output, used when normalize = true
 
 [model]
@@ -234,9 +241,42 @@ def cmd_doctor(args: argparse.Namespace) -> int:
 # -- dataset ---------------------------------------------------------------
 
 
+class FFmpegMissing(RuntimeError):
+    """ffmpeg is required but cannot be found."""
+
+
+def _ffmpeg_install_hint() -> str:
+    key = platform_key()
+    if key == "macos":
+        return "brew install ffmpeg"
+    if key == "windows":
+        return "winget install Gyan.FFmpeg"
+    return "sudo apt install ffmpeg   # Debian/Ubuntu"
+
+
+def _require_ffmpeg(config: Config) -> None:
+    """Stop before doing any work when the required ffmpeg is absent."""
+    if not config.ffmpeg:
+        if config.normalize:
+            raise FFmpegMissing(
+                "ffmpeg is disabled, but [dataset] normalize is on. "
+                "Install it and set [train] ffmpeg = \"ffmpeg\", "
+                "or set [dataset] normalize = false."
+            )
+        return
+    if find_on_path(config.ffmpeg):
+        return
+    raise FFmpegMissing(
+        f"ffmpeg not found: {config.ffmpeg!r}. Install it first:\n"
+        f"    {_ffmpeg_install_hint()}\n"
+        "Then re-run, or set [train] ffmpeg to its full path."
+    )
+
+
 def cmd_dataset(args: argparse.Namespace) -> int:
     config = _config(args)
     try:
+        _require_ffmpeg(config)
         styles = _caption_missing(config)
         songs, output = prepare_dataset(
             config.audio,
@@ -245,7 +285,7 @@ def cmd_dataset(args: argparse.Namespace) -> int:
             config.ffmpeg,
             styles,
         )
-    except (DatasetError, caption_mod.CaptionError, DownloadError) as error:
+    except (FFmpegMissing, DatasetError, caption_mod.CaptionError, DownloadError) as error:
         eprint(f"error: {error}")
         return 1
     if args.json:
@@ -638,6 +678,19 @@ def main(argv: Optional[List[str]] = None) -> int:
     except KeyboardInterrupt:
         eprint("interrupted")
         return 130
+    except (
+        GpuUnavailable,
+        FFmpegMissing,
+        caption_mod.CaptionError,
+        DatasetError,
+        DownloadError,
+        trainer_mod.TrainerError,
+        StageFailed,
+        OSError,
+        ValueError,
+    ) as error:
+        eprint(f"error: {error}")
+        return 1
 
 
 if __name__ == "__main__":

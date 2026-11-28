@@ -155,7 +155,7 @@ class DatasetTests(unittest.TestCase):
         (self.audio / "song.lrc").write_text(LRC, encoding="utf-8")
         # Pre-create .yue2.txt so we know the expected style.
         (self.audio / "song.yue2.txt").write_text("ambient\n", encoding="utf-8")
-        songs, output = prepare_dataset(self.audio)
+        songs, output = prepare_dataset(self.audio, normalize=False)
         self.assertEqual(output, self.audio)
         self.assertEqual(songs[0].style, "ambient")
         self.assertTrue((self.audio / "song.yue2.txt").is_file())
@@ -168,7 +168,7 @@ class DatasetTests(unittest.TestCase):
         (self.audio / "song.lrc").write_text(LRC, encoding="utf-8")
         (self.audio / "song.yue2.txt").write_text("ambient\n", encoding="utf-8")
         with self.assertRaises(DatasetError) as caught:
-            prepare_dataset(self.audio)
+            prepare_dataset(self.audio, normalize=False)
         self.assertIn("normalize", str(caught.exception))
 
 

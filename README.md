@@ -95,7 +95,12 @@ lyrics:
 `my-song.yue2.txt` 是给 planner 的专用一句话风格，`my-song.txt` 的 `caption:` 与它保持一致；
 两者的区别只是 `.txt` 还要承载歌词和器乐标记。
 
-采样率不是 48 kHz 时，把 `[dataset] normalize = true` 打开，会用 ffmpeg 转成 48 kHz 16-bit WAV 后再训练（需要 ffmpeg 在 PATH）。
+`[dataset] normalize` **默认开启**：`yue2-lora dataset` 会用 ffmpeg 把音频统一转成 48 kHz 16-bit WAV
+（输出到 `prepared`，需要 ffmpeg 在 PATH）。已经是 48 kHz WAV、想跳过转换时设为 `false`。
+
+`dataset` 启动时会先检测 ffmpeg：**找不到就直接退出并提示安装命令**（Debian/Ubuntu `sudo apt install ffmpeg`、
+macOS `brew install ffmpeg`、Windows `winget install Gyan.FFmpeg`），不会执行到一半才失败。
+若把 `[train] ffmpeg` 设为 `none` 且 `normalize = true`，同样会报错提示；只有 `normalize = false` 时才允许关闭。
 
 ## 配置说明
 
@@ -110,11 +115,11 @@ lyrics:
 | | `caption_seconds` | 听辨模型每首最多听多少秒（默认 120，超长取中段） |
 | | `captioner` | 指定已有 `ace-caption` 路径（默认自动查找/下载官方预编译） |
 | | `vocals` | 歌词时间对齐用的 `<song>/vocals.wav` 目录（仅 `tuned` + `lyric_timing` 需要） |
-| | `normalize` | 是否用 ffmpeg 统一转 48 kHz |
+| | `normalize` | 是否用 ffmpeg 统一转 48 kHz（默认 `true`） |
 | | `prepared` | `normalize = true` 时 48 kHz 音频的输出目录 |
 | `model` | `base` / `companion` / `tokenizer` | 留空则自动下载到 `models/`；填路径则使用已有文件 |
 | `train` | `device` | `CUDA0` / `Vulkan0` / `MTL0` / `CPU` |
-| | `ffmpeg` | ffmpeg 可执行文件，`none` 表示关闭 |
+| | `ffmpeg` | ffmpeg 可执行文件；`none` 表示关闭（但 `normalize = true` 时仍会要求安装） |
 | | `trainer` | 指定已有 `ace-train`/`music-train` 路径 |
 | `recipe` | `preset` | `fast`(100 步) / `balanced`(200 步) / `thorough`(300 步) / `tuned`(旧配方) |
 | | `seed` | 随机种子 |
@@ -202,6 +207,27 @@ yue2-lora train --resume -c config.toml  # 从最新 optimizer.resume 继续，�
 为什么不在代码里自动编译：训练损失仅 CUDA 可用；主流平台已有预编译，自动编译会给大多数用户
 带来 GB 级工具链、长时间与高内存开销；CUDA 版本/后端也应由用户按驱动自行决定。
 若需核对版本差异，可用 `ace-train --fixture-replay <dir>` 对拍同一固定步的指标。
+
+### GPU 后端与 CUDA 运行时库（Linux）
+
+预编译的 `libggml-cuda.so` 依赖 `libcudart.so.12` / `libcublas.so.12`，但这两个库**不随包分发**。
+若它们不在动态链接器路径里（常见于只用 PyTorch wheel 提供 CUDA 的机器，如 Colab），ggml 会
+**静默回落到 CPU**。本项目在启动 `ace-caption` / `ace-train` 前会自动处理：
+
+- 仅 Linux、且引擎目录存在 `libggml-cuda.so`、且上述库当前不可见时生效；
+- 自动把 pip/conda 的 `site-packages/nvidia/*/lib`（以及 `/usr/local/cuda/lib64`、
+  `/usr/local/cuda-12*/lib64`）加入该**子进程**的 `LD_LIBRARY_PATH`；
+- 打印一行 `[gpu] CUDA runtime not on the loader path; adding: ...` 便于确认。
+
+若这些库完全不存在，命令会**报错退出**（不会退回 CPU 硬跑），并提示安装：
+
+```bash
+pip install nvidia-cuda-runtime-cu12 nvidia-cublas-cu12
+```
+
+系统级安装 CUDA Toolkit 的机器可写入 `/etc/ld.so.conf.d/` 后 `sudo ldconfig`（持久生效）。
+确实想用 CPU 时，请显式安装 CPU 版听辨器（`YUE2_CAPTION_VARIANT=linux-x64-cpu`），
+此时引擎目录不含 `libggml-cuda.so`，不会触发本检查。macOS（Metal）与 Windows 不涉及此逻辑。
 
 模型下载、配置解析、数据准备、命令编排、checkpoint 管理在所有平台一致。
 

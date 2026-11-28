@@ -135,9 +135,12 @@ def probe(trainer: Path) -> str:
     """Run ``--help`` and return its output; used by ``doctor``."""
     if not trainer.is_file():
         raise TrainerError(f"no trainer at {trainer}")
-    result = subprocess.run(
-        [str(trainer), "--help"], capture_output=True, text=True, timeout=120
-    )
+    try:
+        result = subprocess.run(
+            [str(trainer), "--help"], capture_output=True, text=True, timeout=120
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        raise TrainerError(f"could not run {trainer}: {error}") from error
     output = (result.stdout or "") + (result.stderr or "")
     if result.returncode not in (0, 2) or "yue2-joint-train" not in output:
         raise TrainerError(

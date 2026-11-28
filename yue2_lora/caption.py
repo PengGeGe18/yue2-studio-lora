@@ -34,7 +34,7 @@ from typing import Dict, Iterable, List, Optional
 
 from .assets import HOTSTEP_RELEASES, LISTEN_FILES, MOSS_LM
 from .download import archive_stem, ensure_asset, extract_archive, find_file
-from .util import eprint, find_on_path, is_windows, platform_key
+from .util import eprint, find_on_path, gpu_env, is_windows, platform_key
 
 #: ``ace-caption`` is the captioner binary shipped beside the trainer.
 CAPTIONER = "ace-caption.exe" if is_windows() else "ace-caption"
@@ -344,8 +344,11 @@ def _prepare_audio(source: Path, target: Path, seconds: int, ffmpeg: Optional[st
         command += ["-ss", f"{start:.2f}", "-t", str(seconds)]
     command += ["-i", str(source), "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", str(target)]
     try:
-        subprocess.run(command, check=True, capture_output=True)
-    except subprocess.CalledProcessError:
+        subprocess.run(command, check=True, capture_output=True, text=True)
+    except subprocess.CalledProcessError as error:
+        detail = (error.stderr or "").strip().splitlines()
+        suffix = f": {detail[-1]}" if detail else ""
+        eprint(f"[caption] ffmpeg could not prepare {source.name}; using it as-is{suffix}")
         return source
     return target
 
@@ -394,7 +397,7 @@ def describe(
         if ffmpeg:
             command += ["--ffmpeg", ffmpeg]
         try:
-            subprocess.run(command, check=True)
+            subprocess.run(command, check=True, env=gpu_env(binary))
         except (OSError, subprocess.CalledProcessError) as error:
             raise CaptionError(f"the captioner failed: {error}") from error
 

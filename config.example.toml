@@ -14,7 +14,7 @@ audio = "dataset/audio"   # 48 kHz WAV files, each with a <stem>.lrc lyrics file
 # caption_seconds = 120   # how much of a long song the captioner hears
 trigger = "sks"           # rare word the adapter learns to answer to
 # vocals = "dataset/vocals"       # <song>/vocals.wav, only for lyric timing
-normalize = false         # true: convert to 48 kHz with ffmpeg
+normalize = true          # convert to 48 kHz with ffmpeg (default)
 # prepared = "dataset/prepared-audio"   # 48 kHz output, used when normalize = true
 # captioner = "/path/to/ace-caption"    # use an existing captioner build
 

@@ -321,11 +321,16 @@ def normalize_audio(audio: Path, songs: List[Song], destination: Path, ffmpeg: O
         source = audio / song.file
         target = destination / f"{song.stem}.wav"
         eprint(f"[audio] {index}/{len(songs)} {song.file} -> {target.name}")
-        subprocess.run(
-            [ffmpeg, "-nostdin", "-y", "-loglevel", "error", "-i", str(source),
-             "-ar", "48000", "-ac", "2", "-c:a", "pcm_s16le", str(target)],
-            check=True,
-        )
+        try:
+            subprocess.run(
+                [ffmpeg, "-nostdin", "-y", "-loglevel", "error", "-i", str(source),
+                 "-ar", "48000", "-ac", "2", "-c:a", "pcm_s16le", str(target)],
+                check=True,
+            )
+        except subprocess.CalledProcessError as error:
+            raise DatasetError(
+                f"ffmpeg failed to convert {song.file} (exit {error.returncode})"
+            ) from error
         for extension in (".txt", ".yue2.txt"):
             sidecar = audio / f"{song.stem}{extension}"
             if sidecar.is_file():
@@ -335,7 +340,7 @@ def normalize_audio(audio: Path, songs: List[Song], destination: Path, ffmpeg: O
 
 def prepare_dataset(
     audio: Path,
-    normalize: bool = False,
+    normalize: bool = True,
     prepared_dir: Optional[Path] = None,
     ffmpeg: Optional[str] = None,
     styles: Optional[Dict[str, str]] = None,
